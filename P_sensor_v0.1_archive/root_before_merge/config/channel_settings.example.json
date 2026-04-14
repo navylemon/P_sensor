@@ -1,0 +1,100 @@
+{
+  "backend": "simulation",
+  "export_directory": "dev_local/exports",
+  "sampling": {
+    "acquisition_hz": 10,
+    "display_update_hz": 10,
+    "mode": "continuous",
+    "history_seconds": 300
+  },
+  "channels": [
+    {
+      "enabled": true,
+      "name": "Sensor 01",
+      "physical_channel": "cDAQ1Mod1/ai0",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
+      "color": "#3A7CA5"
+    },
+    {
+      "enabled": true,
+      "name": "Sensor 02",
+      "physical_channel": "cDAQ1Mod1/ai1",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
+      "color": "#E63946"
+    },
+    {
+      "enabled": true,
+      "name": "Sensor 03",
+      "physical_channel": "cDAQ1Mod1/ai2",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
+      "color": "#2A9D8F"
+    },
+    {
+      "enabled": true,
+      "name": "Sensor 04",
+      "physical_channel": "cDAQ1Mod1/ai3",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
+      "color": "#F4A261"
+    },
+    {
+      "enabled": true,
+      "name": "Sensor 05",
+      "physical_channel": "cDAQ1Mod2/ai0",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
+      "color": "#6D597A"
+    },
+    {
+      "enabled": true,
+      "name": "Sensor 06",
+      "physical_channel": "cDAQ1Mod2/ai1",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
+      "color": "#457B9D"
+    },
+    {
+      "enabled": true,
+      "name": "Sensor 07",
+      "physical_channel": "cDAQ1Mod2/ai2",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
+      "color": "#8D6A9F"
+    },
+    {
+      "enabled": true,
+      "name": "Sensor 08",
+      "physical_channel": "cDAQ1Mod2/ai3",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
+      "color": "#BC6C25"
+    }
+  ]
+}

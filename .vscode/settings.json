@@ -1,0 +1,30 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [
+    "dev_local/tests"
+  ],
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}\\src"
+  ],
+  "editor.formatOnSave": true,
+  "files.exclude": {
+    "**/tests": true,
+    "**/examples": true,
+    "**/dev_local": true,
+    "**/.venv_broken": true,
+    "**/pytest-cache-files-*": true,
+    "**/__pycache__": true
+  },
+  "search.exclude": {
+    "**/tests": true,
+    "**/examples": true,
+    "**/dev_local": true,
+    "**/.venv": true,
+    "**/.venv_broken": true,
+    "**/pytest-cache-files-*": true,
+    "**/__pycache__": true
+  }
+}

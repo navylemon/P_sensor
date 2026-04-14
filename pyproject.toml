@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p-sensor"
+version = "0.2.0"
+description = "DAQ GUI application for Wheatstone-bridge-based resistive sensors."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "nidaqmx",
+  "numpy",
+  "pandas",
+  "PySide6",
+  "pyqtgraph",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pyinstaller",
+  "pytest",
+  "ruff",
+]
+
+[project.scripts]
+p-sensor = "p_sensor.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "dev_local/tools"]
+testpaths = ["dev_local/tests"]
+addopts = "-p no:cacheprovider"
+norecursedirs = [
+  ".venv",
+  ".venv_broken",
+  "dev_local/examples",
+  "dev_local/exports",
+  "dev_local/scratch",
+  "dev_local/tmp",
+  "pytest-cache-files-*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"

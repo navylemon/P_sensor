@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+pytest-cache-files-*/
+
+# Virtual environments
+.venv/
+.venv_broken/
+
+# Editors and workspace noise
+.idea/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local-only development materials
+dev_local/
+/tests/
+/examples/
+/exports/
+/.tmp/
+/scratch/
+/config/local/
+/logs/
+/output/
+/data/
+memo.txt
+*.code-workspace.local

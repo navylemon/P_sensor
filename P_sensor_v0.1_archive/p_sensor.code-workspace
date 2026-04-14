@@ -1,0 +1,32 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+    "python.terminal.activateEnvironment": true,
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.analysis.extraPaths": [
+      "${workspaceFolder}\\src"
+    ],
+    "files.exclude": {
+      "**/tests": true,
+      "**/examples": true,
+      "**/dev_local": true,
+      "**/scratch": true,
+      "**/.git": true,
+      "**/.venv_broken": true,
+      "**/.tmp": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "ms-python.vscode-pylance",
+      "charliermarsh.ruff"
+    ]
+  }
+}
