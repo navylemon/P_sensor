@@ -6,47 +6,64 @@ from datetime import datetime
 
 @dataclass(slots=True)
 class SamplingConfig:
-    acquisition_hz: float = 10.0
+    acquisition_hz: float = 20.0
     display_update_hz: float = 10.0
-    mode: str = "continuous"
-    history_seconds: int = 300
+    history_seconds: int = 180
 
 
 @dataclass(slots=True)
-class ChannelConfig:
+class AnalogInputChannelConfig:
     enabled: bool
     name: str
     physical_channel: str
-    bridge_type: str
-    excitation_voltage: float
-    nominal_resistance_ohm: float
-    bridge_reference_resistance_ohm: float
-    zero_offset: float = 0.0
-    calibration_scale: float = 1.0
+    scale: float = 1.0
+    offset: float = 0.0
+    engineering_unit: str = "V"
     color: str = "#3A7CA5"
+
+
+@dataclass(slots=True)
+class AnalogOutputChannelConfig:
+    enabled: bool
+    name: str
+    physical_channel: str
+    min_current_ma: float = 0.0
+    max_current_ma: float = 20.0
+    initial_current_ma: float = 0.0
 
 
 @dataclass(slots=True)
 class AppConfig:
     backend: str = "simulation"
-    ni_device_name: str = "cDAQ1"
+    chassis_name: str = "cDAQ1"
+    ai_module_slot: int = 1
+    ao_module_slot: int = 2
     export_directory: str = "dev_local/exports"
     sampling: SamplingConfig = field(default_factory=SamplingConfig)
-    channels: list[ChannelConfig] = field(default_factory=list)
+    ai_channels: list[AnalogInputChannelConfig] = field(default_factory=list)
+    ao_channels: list[AnalogOutputChannelConfig] = field(default_factory=list)
 
 
 @dataclass(slots=True)
-class ChannelReading:
+class AnalogInputReading:
     channel_index: int
     channel_name: str
     voltage: float
-    resistance_ohm: float
-    unit: str = "ohm"
-    status: str = "normal"
+    scaled_value: float
+    unit: str
+    status: str = "ok"
 
 
 @dataclass(slots=True)
-class MeasurementSample:
+class AnalogOutputState:
+    channel_index: int
+    channel_name: str
+    current_ma: float
+
+
+@dataclass(slots=True)
+class MeasurementFrame:
     timestamp: datetime
     elapsed_s: float
-    readings: list[ChannelReading]
+    inputs: list[AnalogInputReading]
+    outputs: list[AnalogOutputState]

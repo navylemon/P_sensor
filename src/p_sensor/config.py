@@ -7,42 +7,28 @@ import sys
 import tempfile
 from pathlib import Path
 
-from p_sensor.models import AppConfig, ChannelConfig, SamplingConfig
+from p_sensor.models import (
+    AnalogInputChannelConfig,
+    AnalogOutputChannelConfig,
+    AppConfig,
+    SamplingConfig,
+)
 
 
-DEFAULT_COLORS = [
-    "#3A7CA5",
-    "#E63946",
-    "#2A9D8F",
-    "#F4A261",
-    "#6D597A",
-    "#457B9D",
-    "#8D6A9F",
-    "#BC6C25",
-    "#1D3557",
-    "#E76F51",
-    "#118AB2",
-    "#06D6A0",
-    "#EF476F",
-    "#FFD166",
-    "#8338EC",
-    "#3D5A80",
-]
-
-DEFAULT_NI_DEVICE_NAME = "cDAQ1"
+DEFAULT_COLORS = ["#3A7CA5", "#E63946", "#2A9D8F", "#F4A261"]
+DEFAULT_CHASSIS_NAME = "cDAQ1"
 DEFAULT_EXPORT_DIRECTORY = "dev_local/exports"
-DEFAULT_SENSOR_EXCITATION_VOLTAGE = 1.0
-DEFAULT_SENSOR_NOMINAL_RESISTANCE_OHM = 80.0
-DEFAULT_BRIDGE_REFERENCE_RESISTANCE_OHM = 82.0
+DEFAULT_AI_MODULE_SLOT = 1
+DEFAULT_AO_MODULE_SLOT = 2
 SUPPORTED_BACKENDS = {"simulation", "ni"}
-SUPPORTED_BRIDGE_TYPES = {"quarter_bridge", "half_bridge", "full_bridge"}
+MAX_CDAQ_9174_SLOTS = 4
 PROJECT_LOCAL_ANCHORS = ("config", "dev_local", "docs", "scripts", "src", "tests")
 
 _PHYSICAL_CHANNEL_PATTERN = re.compile(
-    r"(?P<device>[A-Za-z0-9_-]+)(?:/)?Mod(?P<module>\d+)/ai(?P<port>\d+)$",
+    r"(?P<device>[A-Za-z0-9_-]+)(?:/)?Mod(?P<slot>\d+)/(?P<kind>ai|ao)(?P<port>\d+)$",
     re.IGNORECASE,
 )
-_GENERIC_AI_PATTERN = re.compile(r"/ai(?P<port>\d+)$", re.IGNORECASE)
+_GENERIC_CHANNEL_PATTERN = re.compile(r"/(?P<kind>ai|ao)(?P<port>\d+)$", re.IGNORECASE)
 
 
 def _looks_like_project_root(path: Path) -> bool:
@@ -132,9 +118,87 @@ def normalize_runtime_path_value(path: str | Path, *, base_path: str | Path | No
         return str(resolved)
 
 
+def build_physical_channel(
+    module_slot: int,
+    channel_port: int,
+    *,
+    channel_kind: str,
+    chassis_name: str = DEFAULT_CHASSIS_NAME,
+) -> str:
+    if module_slot < 1 or module_slot > MAX_CDAQ_9174_SLOTS:
+        raise ValueError(f"Module slot must be between 1 and {MAX_CDAQ_9174_SLOTS}.")
+    if channel_port < 0:
+        raise ValueError("Channel port must be 0 or higher.")
+    if channel_kind not in {"ai", "ao"}:
+        raise ValueError(f"Unsupported channel kind: {channel_kind}")
+    cleaned_chassis_name = chassis_name.strip() or DEFAULT_CHASSIS_NAME
+    return f"{cleaned_chassis_name}Mod{module_slot}/{channel_kind}{channel_port}"
+
+
+def channel_selection_from_physical_channel(
+    physical_channel: str,
+    *,
+    fallback_slot: int,
+    fallback_port: int,
+    expected_kind: str,
+) -> tuple[int, int]:
+    match = _PHYSICAL_CHANNEL_PATTERN.search(physical_channel.strip())
+    if match and match.group("kind").lower() == expected_kind:
+        return int(match.group("slot")), int(match.group("port"))
+
+    generic_match = _GENERIC_CHANNEL_PATTERN.search(physical_channel.strip())
+    if generic_match and generic_match.group("kind").lower() == expected_kind:
+        return fallback_slot, int(generic_match.group("port"))
+
+    return fallback_slot, fallback_port
+
+
+def normalize_physical_channel(
+    physical_channel: str,
+    *,
+    fallback_slot: int,
+    fallback_port: int,
+    expected_kind: str,
+    chassis_name: str = DEFAULT_CHASSIS_NAME,
+    use_slotted_module_path: bool = False,
+) -> str:
+    module_slot, channel_port = channel_selection_from_physical_channel(
+        physical_channel,
+        fallback_slot=fallback_slot,
+        fallback_port=fallback_port,
+        expected_kind=expected_kind,
+    )
+    cleaned_chassis_name = chassis_name.strip() or DEFAULT_CHASSIS_NAME
+    if use_slotted_module_path:
+        return f"{cleaned_chassis_name}/Mod{module_slot}/{expected_kind}{channel_port}"
+    return build_physical_channel(
+        module_slot,
+        channel_port,
+        channel_kind=expected_kind,
+        chassis_name=cleaned_chassis_name,
+    )
+
+
+def infer_chassis_name(channels_data: list[dict], default_chassis_name: str = DEFAULT_CHASSIS_NAME) -> str:
+    for item in channels_data:
+        physical_channel = str(item.get("physical_channel", "")).strip()
+        match = _PHYSICAL_CHANNEL_PATTERN.search(physical_channel)
+        if match:
+            return match.group("device")
+    return default_chassis_name
+
+
 def validate_app_config(config: AppConfig) -> AppConfig:
     if config.backend not in SUPPORTED_BACKENDS:
         raise ValueError(f"Unsupported backend: {config.backend}")
+    if not config.chassis_name.strip():
+        raise ValueError("Chassis name must not be empty.")
+    if config.ai_module_slot < 1 or config.ai_module_slot > MAX_CDAQ_9174_SLOTS:
+        raise ValueError(f"AI module slot must be between 1 and {MAX_CDAQ_9174_SLOTS}.")
+    if config.ao_module_slot < 1 or config.ao_module_slot > MAX_CDAQ_9174_SLOTS:
+        raise ValueError(f"AO module slot must be between 1 and {MAX_CDAQ_9174_SLOTS}.")
+    if config.ai_module_slot == config.ao_module_slot:
+        raise ValueError("AI and AO modules cannot use the same chassis slot.")
     if config.sampling.acquisition_hz <= 0:
         raise ValueError("Acquisition Hz must be greater than 0.")
     if config.sampling.display_update_hz <= 0:
@@ -143,150 +207,115 @@ def validate_app_config(config: AppConfig) -> AppConfig:
         raise ValueError("History seconds must be greater than 0.")
     if not config.export_directory.strip():
         raise ValueError("Export directory must not be empty.")
-    if not config.ni_device_name.strip():
-        raise ValueError("NI device name must not be empty.")
+    if not config.ai_channels:
+        raise ValueError("At least one analog input channel must exist.")
+    if not any(channel.enabled for channel in config.ai_channels):
+        raise ValueError("At least one analog input channel must be enabled.")
 
-    for index, channel in enumerate(config.channels, start=1):
+    for index, channel in enumerate(config.ai_channels, start=1):
         if not channel.name.strip():
-            raise ValueError(f"Channel {index} name must not be empty.")
+            raise ValueError(f"AI channel {index} name must not be empty.")
         if not channel.physical_channel.strip():
-            raise ValueError(f"Channel {index} physical channel must not be empty.")
-        if channel.bridge_type not in SUPPORTED_BRIDGE_TYPES:
-            raise ValueError(
-                f"Channel {index} bridge type must be one of: {', '.join(sorted(SUPPORTED_BRIDGE_TYPES))}."
-            )
-        if channel.excitation_voltage <= 0:
-            raise ValueError(f"Channel {index} excitation voltage must be greater than 0.")
-        if channel.nominal_resistance_ohm <= 0:
-            raise ValueError(f"Channel {index} nominal resistance must be greater than 0.")
-        if channel.bridge_reference_resistance_ohm <= 0:
-            raise ValueError(f"Channel {index} bridge reference resistance must be greater than 0.")
-        if channel.calibration_scale == 0:
-            raise ValueError(f"Channel {index} calibration scale must not be 0.")
+            raise ValueError(f"AI channel {index} physical channel must not be empty.")
+        if not channel.engineering_unit.strip():
+            raise ValueError(f"AI channel {index} engineering unit must not be empty.")
+
+    for index, channel in enumerate(config.ao_channels, start=1):
+        if not channel.name.strip():
+            raise ValueError(f"AO channel {index} name must not be empty.")
+        if not channel.physical_channel.strip():
+            raise ValueError(f"AO channel {index} physical channel must not be empty.")
+        if channel.min_current_ma >= channel.max_current_ma:
+            raise ValueError(f"AO channel {index} current range is invalid.")
+        if not (channel.min_current_ma <= channel.initial_current_ma <= channel.max_current_ma):
+            raise ValueError(f"AO channel {index} initial current must stay inside its current range.")
 
     return config
 
 
-def build_physical_channel(
-    module_number: int,
-    sensor_port: int,
-    *,
-    device_name: str = DEFAULT_NI_DEVICE_NAME,
-) -> str:
-    if module_number < 1:
-        raise ValueError("Module number must be 1 or higher.")
-    if sensor_port < 1:
-        raise ValueError("Sensor port must be 1 or higher.")
-    cleaned_device_name = device_name.strip() or DEFAULT_NI_DEVICE_NAME
-    return f"{cleaned_device_name}Mod{module_number}/ai{sensor_port - 1}"
-
-
-def channel_selection_from_physical_channel(physical_channel: str, fallback_index: int = 0) -> tuple[int, int]:
-    match = _PHYSICAL_CHANNEL_PATTERN.search(physical_channel.strip())
-    if match:
-        return int(match.group("module")), int(match.group("port")) + 1
-
-    generic_match = _GENERIC_AI_PATTERN.search(physical_channel.strip())
-    fallback_module = (fallback_index // 4) + 1
-    fallback_port = (fallback_index % 4) + 1
-    if generic_match:
-        return fallback_module, int(generic_match.group("port")) + 1
-
-    return fallback_module, fallback_port
-
-
-def build_channel_name(module_number: int, sensor_port: int) -> str:
-    return f"Module {module_number} Port {sensor_port}"
-
-
-def normalize_physical_channel(
-    physical_channel: str,
-    fallback_index: int = 0,
-    *,
-    device_name: str = DEFAULT_NI_DEVICE_NAME,
-    use_slotted_module_path: bool = False,
-) -> str:
-    module_number, sensor_port = channel_selection_from_physical_channel(physical_channel, fallback_index)
-    cleaned_device_name = device_name.strip() or DEFAULT_NI_DEVICE_NAME
-    if use_slotted_module_path:
-        return f"{cleaned_device_name}/Mod{module_number}/ai{sensor_port - 1}"
-    return build_physical_channel(module_number, sensor_port, device_name=cleaned_device_name)
-
-
-def infer_ni_device_name(channels_data: list[dict], default_device_name: str = DEFAULT_NI_DEVICE_NAME) -> str:
-    for item in channels_data:
-        physical_channel = str(item.get("physical_channel", "")).strip()
-        match = _PHYSICAL_CHANNEL_PATTERN.search(physical_channel)
-        if match:
-            return match.group("device")
-    return default_device_name
-
-
-def default_app_config(channel_count: int = 8) -> AppConfig:
-    channels: list[ChannelConfig] = []
-    for index in range(channel_count):
-        module_number = (index // 4) + 1
-        sensor_port = (index % 4) + 1
-        channels.append(
-            ChannelConfig(
-                enabled=True,
-                name=build_channel_name(module_number, sensor_port),
-                physical_channel=build_physical_channel(
-                    module_number,
-                    sensor_port,
-                    device_name=DEFAULT_NI_DEVICE_NAME,
-                ),
-                bridge_type="quarter_bridge",
-                excitation_voltage=DEFAULT_SENSOR_EXCITATION_VOLTAGE,
-                nominal_resistance_ohm=DEFAULT_SENSOR_NOMINAL_RESISTANCE_OHM,
-                bridge_reference_resistance_ohm=DEFAULT_BRIDGE_REFERENCE_RESISTANCE_OHM,
-                zero_offset=0.0,
-                calibration_scale=1.0,
-                color=DEFAULT_COLORS[index % len(DEFAULT_COLORS)],
-            )
+def default_app_config(input_channel_count: int = 2, output_channel_count: int = 2) -> AppConfig:
+    ai_channels = [
+        AnalogInputChannelConfig(
+            enabled=True,
+            name=f"AI {index + 1}",
+            physical_channel=build_physical_channel(
+                DEFAULT_AI_MODULE_SLOT,
+                index,
+                channel_kind="ai",
+                chassis_name=DEFAULT_CHASSIS_NAME,
+            ),
+            scale=1.0,
+            offset=0.0,
+            engineering_unit="V",
+            color=DEFAULT_COLORS[index % len(DEFAULT_COLORS)],
         )
+        for index in range(input_channel_count)
+    ]
+    ao_channels = [
+        AnalogOutputChannelConfig(
+            enabled=True,
+            name=f"AO {index + 1}",
+            physical_channel=build_physical_channel(
+                DEFAULT_AO_MODULE_SLOT,
+                index,
+                channel_kind="ao",
+                chassis_name=DEFAULT_CHASSIS_NAME,
+            ),
+            min_current_ma=0.0,
+            max_current_ma=20.0,
+            initial_current_ma=0.0,
+        )
+        for index in range(output_channel_count)
+    ]
 
     return validate_app_config(
         AppConfig(
             backend="simulation",
-            ni_device_name=DEFAULT_NI_DEVICE_NAME,
+            chassis_name=DEFAULT_CHASSIS_NAME,
+            ai_module_slot=DEFAULT_AI_MODULE_SLOT,
+            ao_module_slot=DEFAULT_AO_MODULE_SLOT,
             export_directory=DEFAULT_EXPORT_DIRECTORY,
-            sampling=SamplingConfig(
-                acquisition_hz=10.0,
-                display_update_hz=10.0,
-                mode="continuous",
-                history_seconds=300,
-            ),
-            channels=channels,
-        ),
+            sampling=SamplingConfig(acquisition_hz=20.0, display_update_hz=10.0, history_seconds=180),
+            ai_channels=ai_channels,
+            ao_channels=ao_channels,
+        )
     )
 
 
 def config_to_dict(config: AppConfig) -> dict:
     return {
         "backend": config.backend,
-        "ni_device_name": config.ni_device_name,
+        "chassis_name": config.chassis_name,
+        "ai_module_slot": config.ai_module_slot,
+        "ao_module_slot": config.ao_module_slot,
         "export_directory": config.export_directory,
         "sampling": {
             "acquisition_hz": config.sampling.acquisition_hz,
             "display_update_hz": config.sampling.display_update_hz,
-            "mode": config.sampling.mode,
             "history_seconds": config.sampling.history_seconds,
         },
-        "channels": [
+        "ai_channels": [
             {
                 "enabled": channel.enabled,
                 "name": channel.name,
                 "physical_channel": channel.physical_channel,
-                "bridge_type": channel.bridge_type,
-                "excitation_voltage": channel.excitation_voltage,
-                "nominal_resistance_ohm": channel.nominal_resistance_ohm,
-                "bridge_reference_resistance_ohm": channel.bridge_reference_resistance_ohm,
-                "zero_offset": channel.zero_offset,
-                "calibration_scale": channel.calibration_scale,
+                "scale": channel.scale,
+                "offset": channel.offset,
+                "engineering_unit": channel.engineering_unit,
                 "color": channel.color,
             }
-            for channel in config.channels
+            for channel in config.ai_channels
+        ],
+        "ao_channels": [
+            {
+                "enabled": channel.enabled,
+                "name": channel.name,
+                "physical_channel": channel.physical_channel,
+                "min_current_ma": channel.min_current_ma,
+                "max_current_ma": channel.max_current_ma,
+                "initial_current_ma": channel.initial_current_ma,
+            }
+            for channel in config.ao_channels
         ],
     }
 
@@ -294,56 +323,86 @@ def config_to_dict(config: AppConfig) -> dict:
 def load_config(path: str | Path) -> AppConfig:
     config_path = resolve_runtime_path(path)
     data = json.loads(config_path.read_text(encoding="utf-8"))
-    channels_data = list(data.get("channels", []))
-    ni_device_name = str(data.get("ni_device_name", "")).strip() or infer_ni_device_name(channels_data)
+    ai_channels_data = list(data.get("ai_channels", []))
+    ao_channels_data = list(data.get("ao_channels", []))
+    chassis_name = (
+        str(data.get("chassis_name", "")).strip()
+        or infer_chassis_name(ai_channels_data)
+        or infer_chassis_name(ao_channels_data)
+    )
+    if not chassis_name:
+        chassis_name = DEFAULT_CHASSIS_NAME
 
+    ai_module_slot = int(data.get("ai_module_slot", DEFAULT_AI_MODULE_SLOT))
+    ao_module_slot = int(data.get("ao_module_slot", DEFAULT_AO_MODULE_SLOT))
     sampling_data = data.get("sampling", {})
     sampling = SamplingConfig(
-        acquisition_hz=float(sampling_data.get("acquisition_hz", 10.0)),
+        acquisition_hz=float(sampling_data.get("acquisition_hz", 20.0)),
         display_update_hz=float(sampling_data.get("display_update_hz", 10.0)),
-        mode=str(sampling_data.get("mode", "continuous")),
-        history_seconds=int(sampling_data.get("history_seconds", 300)),
+        history_seconds=int(sampling_data.get("history_seconds", 180)),
     )
 
-    channels = [
-        ChannelConfig(
+    ai_channels = [
+        AnalogInputChannelConfig(
             enabled=bool(item.get("enabled", True)),
-            name=str(item.get("name", f"Sensor {index + 1:02d}")),
+            name=str(item.get("name", f"AI {index + 1}")),
             physical_channel=str(
                 item.get(
                     "physical_channel",
                     build_physical_channel(
-                        (index // 4) + 1,
-                        (index % 4) + 1,
-                        device_name=ni_device_name,
+                        ai_module_slot,
+                        index,
+                        channel_kind="ai",
+                        chassis_name=chassis_name,
                     ),
                 )
             ),
-            bridge_type=str(item.get("bridge_type", "quarter_bridge")),
-            excitation_voltage=float(item.get("excitation_voltage", DEFAULT_SENSOR_EXCITATION_VOLTAGE)),
-            nominal_resistance_ohm=float(item.get("nominal_resistance_ohm", DEFAULT_SENSOR_NOMINAL_RESISTANCE_OHM)),
-            bridge_reference_resistance_ohm=float(
-                item.get(
-                    "bridge_reference_resistance_ohm",
-                    item.get("nominal_resistance_ohm", DEFAULT_BRIDGE_REFERENCE_RESISTANCE_OHM),
-                )
-            ),
-            zero_offset=float(item.get("zero_offset", 0.0)),
-            calibration_scale=float(item.get("calibration_scale", 1.0)),
+            scale=float(item.get("scale", 1.0)),
+            offset=float(item.get("offset", 0.0)),
+            engineering_unit=str(item.get("engineering_unit", "V")),
             color=str(item.get("color", DEFAULT_COLORS[index % len(DEFAULT_COLORS)])),
         )
-        for index, item in enumerate(channels_data)
+        for index, item in enumerate(ai_channels_data)
     ]
+    if not ai_channels:
+        ai_channels = default_app_config().ai_channels
+
+    ao_channels = [
+        AnalogOutputChannelConfig(
+            enabled=bool(item.get("enabled", True)),
+            name=str(item.get("name", f"AO {index + 1}")),
+            physical_channel=str(
+                item.get(
+                    "physical_channel",
+                    build_physical_channel(
+                        ao_module_slot,
+                        index,
+                        channel_kind="ao",
+                        chassis_name=chassis_name,
+                    ),
+                )
+            ),
+            min_current_ma=float(item.get("min_current_ma", 0.0)),
+            max_current_ma=float(item.get("max_current_ma", 20.0)),
+            initial_current_ma=float(item.get("initial_current_ma", 0.0)),
+        )
+        for index, item in enumerate(ao_channels_data)
+    ]
+    if not ao_channels:
+        ao_channels = default_app_config().ao_channels
 
     return validate_app_config(
         AppConfig(
             backend=str(data.get("backend", "simulation")),
-            ni_device_name=ni_device_name,
+            chassis_name=chassis_name,
+            ai_module_slot=ai_module_slot,
+            ao_module_slot=ao_module_slot,
             export_directory=normalize_runtime_path_value(
                 str(data.get("export_directory", DEFAULT_EXPORT_DIRECTORY))
             ),
             sampling=sampling,
-            channels=channels,
+            ai_channels=ai_channels,
+            ao_channels=ao_channels,
         )
     )
 

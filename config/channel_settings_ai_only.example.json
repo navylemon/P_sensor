@@ -29,22 +29,5 @@
       "color": "#E63946"
     }
   ],
-  "ao_channels": [
-    {
-      "enabled": true,
-      "name": "AO 1",
-      "physical_channel": "cDAQ1Mod2/ao0",
-      "min_current_ma": 0.0,
-      "max_current_ma": 20.0,
-      "initial_current_ma": 0.0
-    },
-    {
-      "enabled": true,
-      "name": "AO 2",
-      "physical_channel": "cDAQ1Mod2/ao1",
-      "min_current_ma": 0.0,
-      "max_current_ma": 20.0,
-      "initial_current_ma": 0.0
-    }
-  ]
+  "ao_channels": []
 }

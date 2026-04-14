@@ -6,7 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from p_sensor.models import AppConfig, AnalogOutputState, MeasurementFrame
+from p_sensor.models import AppConfig, MeasurementSample
 
 
 class BackendError(RuntimeError):
@@ -26,11 +26,7 @@ class MeasurementBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def read(self, elapsed_s: float) -> MeasurementFrame:
-        raise NotImplementedError
-
-    @abstractmethod
-    def write_output_currents(self, currents_ma: dict[int, float]) -> list[AnalogOutputState]:
+    def read(self, elapsed_s: float) -> MeasurementSample:
         raise NotImplementedError
 
 
@@ -40,13 +36,11 @@ class AcquisitionController:
     def __init__(self, backend: MeasurementBackend, acquisition_hz: float) -> None:
         self.backend = backend
         self.acquisition_hz = max(1.0, acquisition_hz)
-        self.frames: queue.Queue[MeasurementFrame] = queue.Queue()
+        self.samples: queue.Queue[MeasurementSample] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
         self._paused = threading.Event()
         self._started_at: float | None = None
-        self._pause_started_at: float | None = None
-        self._paused_accumulated_s = 0.0
         self._failure: Exception | None = None
         self._failure_lock = threading.Lock()
 
@@ -67,27 +61,17 @@ class AcquisitionController:
             return
 
         self._clear_failure()
-        self._clear_pending_frames()
+        self._clear_pending_samples()
         self._running.set()
         self._paused.clear()
         self._started_at = time.perf_counter()
-        self._pause_started_at = None
-        self._paused_accumulated_s = 0.0
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
     def pause(self) -> None:
-        if not self._running.is_set() or self._paused.is_set():
-            return
-        self._pause_started_at = time.perf_counter()
         self._paused.set()
 
     def resume(self) -> None:
-        if not self._paused.is_set():
-            return
-        if self._pause_started_at is not None:
-            self._paused_accumulated_s += time.perf_counter() - self._pause_started_at
-        self._pause_started_at = None
         self._paused.clear()
 
     def stop(self) -> None:
@@ -98,11 +82,11 @@ class AcquisitionController:
         self._thread = None
         self.backend.disconnect()
 
-    def drain_frames(self) -> list[MeasurementFrame]:
-        drained: list[MeasurementFrame] = []
+    def drain_samples(self) -> list[MeasurementSample]:
+        drained: list[MeasurementSample] = []
         while True:
             try:
-                drained.append(self.frames.get_nowait())
+                drained.append(self.samples.get_nowait())
             except queue.Empty:
                 break
         return drained
@@ -113,8 +97,8 @@ class AcquisitionController:
             self._failure = None
         return failure
 
-    def _clear_pending_frames(self) -> None:
-        self.drain_frames()
+    def _clear_pending_samples(self) -> None:
+        self.drain_samples()
 
     def _clear_failure(self) -> None:
         with self._failure_lock:
@@ -129,15 +113,13 @@ class AcquisitionController:
 
         while self._running.is_set():
             loop_started = time.perf_counter()
+
             try:
-                if self._paused.is_set():
-                    time.sleep(min(interval, 0.05))
-                    continue
-                elapsed_s = loop_started - (self._started_at or loop_started)
-                elapsed_s -= self._paused_accumulated_s
-                frame = self.backend.read(elapsed_s)
-                frame.timestamp = datetime.now()
-                self.frames.put(frame)
+                if not self._paused.is_set():
+                    elapsed_s = loop_started - (self._started_at or loop_started)
+                    sample = self.backend.read(elapsed_s)
+                    sample.timestamp = datetime.now()
+                    self.samples.put(sample)
             except Exception as exc:
                 if self._running.is_set():
                     self._set_failure(exc)

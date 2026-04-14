@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "p-sensor"
-version = "0.3.0"
-description = "DAQ GUI application for NI cDAQ-9174 with NI 9234 input and NI 9265 output."
+version = "0.2.0"
+description = "DAQ GUI application for Wheatstone-bridge-based resistive sensors."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
@@ -25,7 +25,6 @@ dev = [
 
 [project.scripts]
 p-sensor = "p_sensor.app:main"
-p-sensor-ai = "p_sensor.ai_app:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

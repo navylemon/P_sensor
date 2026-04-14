@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from p_sensor.models import AnalogInputChannelConfig, AnalogOutputChannelConfig, MeasurementFrame
+from p_sensor.models import ChannelConfig, MeasurementSample
 
 
 @dataclass(slots=True)
@@ -42,12 +42,7 @@ class CsvRecorder:
     def rows_written(self) -> int:
         return self._rows_written
 
-    def start(
-        self,
-        file_path: str | Path,
-        ai_channels: list[AnalogInputChannelConfig],
-        ao_channels: list[AnalogOutputChannelConfig],
-    ) -> CsvRecorderSummary:
+    def start(self, file_path: str | Path, channels: list[ChannelConfig]) -> CsvRecorderSummary:
         if self._file is not None:
             self.stop()
 
@@ -63,7 +58,7 @@ class CsvRecorder:
             started_at = time.monotonic()
             self._last_flush_monotonic = started_at
             self._last_fsync_monotonic = started_at
-            self._write_header(ai_channels, ao_channels)
+            self._write_header(channels)
         except Exception as exc:
             self.stop()
             raise OSError(f"Failed to initialize CSV recorder at {path}: {exc}") from exc
@@ -88,37 +83,28 @@ class CsvRecorder:
         if self._rows_since_flush >= self.FLUSH_ROWS or (now - self._last_flush_monotonic) >= self.FLUSH_INTERVAL_S:
             self._flush_to_disk()
 
-    def _write_header(
-        self,
-        ai_channels: list[AnalogInputChannelConfig],
-        ao_channels: list[AnalogOutputChannelConfig],
-    ) -> None:
+    def _write_header(self, channels: list[ChannelConfig]) -> None:
         if not self._writer or not self._file or self._header_written:
             return
 
         header = ["timestamp", "elapsed_s"]
-        for channel in ai_channels:
+        for channel in channels:
             if not channel.enabled:
                 continue
             base_name = channel.name.lower().replace(" ", "_")
-            header.extend([f"{base_name}_voltage", f"{base_name}_value"])
-        for channel in ao_channels:
-            base_name = channel.name.lower().replace(" ", "_")
-            header.append(f"{base_name}_current_ma")
+            header.extend([f"{base_name}_voltage", f"{base_name}_resistance_ohm"])
 
         self._writer.writerow(header)
         self._header_written = True
         self._flush_to_disk(force_fsync=True)
 
-    def append(self, frame: MeasurementFrame) -> None:
+    def append(self, sample: MeasurementSample) -> None:
         if not self._writer or not self._file:
             return
 
-        row = [frame.timestamp.isoformat(timespec="milliseconds"), f"{frame.elapsed_s:.3f}"]
-        for reading in frame.inputs:
-            row.extend([f"{reading.voltage:.6f}", f"{reading.scaled_value:.6f}"])
-        for state in frame.outputs:
-            row.append(f"{state.current_ma:.6f}")
+        row = [sample.timestamp.isoformat(timespec="milliseconds"), f"{sample.elapsed_s:.3f}"]
+        for reading in sample.readings:
+            row.extend([f"{reading.voltage:.6f}", f"{reading.resistance_ohm:.6f}"])
 
         try:
             self._writer.writerow(row)
