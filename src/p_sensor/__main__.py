@@ -1,4 +1,4 @@
-from p_sensor.app import main
+from p_sensor.launcher import main
 
 
 if __name__ == "__main__":

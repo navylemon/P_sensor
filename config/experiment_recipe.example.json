@@ -1,0 +1,26 @@
+{
+  "recipe_id": "example_force_sweep",
+  "metadata": {
+    "description": "Example automation recipe for displacement-step measurements."
+  },
+  "steps": [
+    {
+      "step_id": "step_001",
+      "target_displacement": 0.1,
+      "settle_time_s": 0.2,
+      "measure_frame_count": 5,
+      "disengage_after_measure": true,
+      "post_disengage_wait_s": 0.1,
+      "notes": "Initial light contact"
+    },
+    {
+      "step_id": "step_002",
+      "target_displacement": 0.2,
+      "settle_time_s": 0.2,
+      "measure_frame_count": 5,
+      "disengage_after_measure": true,
+      "post_disengage_wait_s": 0.1,
+      "notes": "Second displacement step"
+    }
+  ]
+}

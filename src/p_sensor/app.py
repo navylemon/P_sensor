@@ -57,21 +57,25 @@ def configure_palette(app: QApplication) -> None:
     app.setPalette(palette)
 
 
-def main(profile: AppProfile = IO_APP_PROFILE) -> int:
-    config_path = resolve_default_config_path(profile)
+def run_application(profile: AppProfile = IO_APP_PROFILE, *, config_path: Path | None = None) -> int:
+    resolved_config_path = resolve_default_config_path(profile) if config_path is None else config_path
     app = QApplication(sys.argv)
     app.setOrganizationName("25CNT")
     app.setApplicationName(profile.application_name)
     configure_palette(app)
     try:
-        config = load_or_create_config(config_path, profile)
+        config = load_or_create_config(resolved_config_path, profile)
     except Exception as exc:
         QMessageBox.critical(None, "Configuration Error", f"Failed to load configuration:\n{exc}")
         return 1
 
-    window = MainWindow(config=config, config_path=config_path, profile=profile)
+    window = MainWindow(config=config, config_path=resolved_config_path, profile=profile)
     window.show()
     return app.exec()
+
+
+def main(profile: AppProfile = IO_APP_PROFILE) -> int:
+    return run_application(profile)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ class SamplingConfig:
     acquisition_hz: float = 20.0
     display_update_hz: float = 10.0
     history_seconds: int = 180
+    mode: str = "continuous"
 
 
 @dataclass(slots=True)
@@ -20,6 +21,11 @@ class AnalogInputChannelConfig:
     offset: float = 0.0
     engineering_unit: str = "V"
     color: str = "#3A7CA5"
+    bridge_type: str = "quarter_bridge"
+    excitation_voltage: float = 5.0
+    nominal_resistance_ohm: float = 350.0
+    zero_offset: float = 0.0
+    calibration_scale: float = 1.0
 
 
 @dataclass(slots=True)
@@ -42,6 +48,14 @@ class AppConfig:
     sampling: SamplingConfig = field(default_factory=SamplingConfig)
     ai_channels: list[AnalogInputChannelConfig] = field(default_factory=list)
     ao_channels: list[AnalogOutputChannelConfig] = field(default_factory=list)
+
+    @property
+    def channels(self) -> list[AnalogInputChannelConfig]:
+        return self.ai_channels
+
+    @channels.setter
+    def channels(self, value: list[AnalogInputChannelConfig]) -> None:
+        self.ai_channels = value
 
 
 @dataclass(slots=True)
@@ -67,3 +81,37 @@ class MeasurementFrame:
     elapsed_s: float
     inputs: list[AnalogInputReading]
     outputs: list[AnalogOutputState]
+
+
+@dataclass(slots=True)
+class ChannelReading:
+    channel_index: int
+    channel_name: str
+    voltage: float
+    resistance_ohm: float
+    status: str = "ok"
+
+
+@dataclass(slots=True)
+class MeasurementSample:
+    timestamp: datetime
+    elapsed_s: float
+    readings: list[ChannelReading]
+
+    @property
+    def inputs(self) -> list[AnalogInputReading]:
+        return [
+            AnalogInputReading(
+                channel_index=reading.channel_index,
+                channel_name=reading.channel_name,
+                voltage=reading.voltage,
+                scaled_value=reading.resistance_ohm,
+                unit="ohm",
+                status=reading.status,
+            )
+            for reading in self.readings
+        ]
+
+    @property
+    def outputs(self) -> list[AnalogOutputState]:
+        return []

@@ -37,3 +37,27 @@ AI_MONITOR_PROFILE = AppProfile(
     default_input_channel_count=2,
     default_output_channel_count=0,
 )
+
+
+PROFILE_ALIASES: dict[str, AppProfile] = {
+    "io": IO_APP_PROFILE,
+    "io_console": IO_APP_PROFILE,
+    "default": IO_APP_PROFILE,
+    "ai": AI_MONITOR_PROFILE,
+    "ai_monitor": AI_MONITOR_PROFILE,
+}
+
+
+def resolve_profile(profile_name: str | None) -> AppProfile:
+    if profile_name is None:
+        return IO_APP_PROFILE
+
+    key = profile_name.strip().lower()
+    if not key:
+        return IO_APP_PROFILE
+
+    try:
+        return PROFILE_ALIASES[key]
+    except KeyError as exc:
+        supported = ", ".join(sorted(PROFILE_ALIASES))
+        raise ValueError(f"Unknown profile: {profile_name!r}. Supported profiles: {supported}") from exc

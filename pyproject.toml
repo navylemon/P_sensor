@@ -12,6 +12,7 @@ dependencies = [
   "nidaqmx",
   "numpy",
   "pandas",
+  "pyserial",
   "PySide6",
   "pyqtgraph",
 ]
@@ -24,8 +25,9 @@ dev = [
 ]
 
 [project.scripts]
-p-sensor = "p_sensor.app:main"
-p-sensor-ai = "p_sensor.ai_app:main"
+p-sensor = "p_sensor.launcher:main"
+p-sensor-io = "p_sensor.launcher:main_io"
+p-sensor-ai = "p_sensor.launcher:main_ai"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

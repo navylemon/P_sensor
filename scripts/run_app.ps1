@@ -10,7 +10,7 @@ if (-not (Test-Path $pythonPath)) {
 $env:PYTHONPATH = Join-Path $workspaceRoot "src"
 Push-Location $workspaceRoot
 try {
-  & $pythonPath -m p_sensor
+  & $pythonPath -m p_sensor --profile io
 } finally {
   Pop-Location
 }

@@ -29,9 +29,8 @@ class MeasurementBackend(ABC):
     def read(self, elapsed_s: float) -> MeasurementFrame:
         raise NotImplementedError
 
-    @abstractmethod
     def write_output_currents(self, currents_ma: dict[int, float]) -> list[AnalogOutputState]:
-        raise NotImplementedError
+        return []
 
 
 class AcquisitionController:

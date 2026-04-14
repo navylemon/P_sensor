@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+import queue
+import threading
 
 import pyqtgraph as pg
 from PySide6.QtCore import QSettings, QTimer, Qt
@@ -33,6 +35,13 @@ from PySide6.QtWidgets import (
 
 from p_sensor import __version__
 from p_sensor.acquisition import AcquisitionController, NiDaqBackend, SimulatedBackend
+from p_sensor.automation import (
+    AutomationCancelledError,
+    AutomationSessionOptions,
+    ExperimentRunner,
+    NoOpCommandBridge,
+    load_recipe,
+)
 from p_sensor.config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_EXPORT_DIRECTORY,
@@ -43,24 +52,27 @@ from p_sensor.config import (
     save_config,
     validate_app_config,
 )
+from p_sensor.motion import Shot102CommandBridge, Shot102Controller, load_shot102_motion_config
 from p_sensor.models import (
     AnalogInputChannelConfig,
     AnalogInputReading,
     AnalogOutputChannelConfig,
     AnalogOutputState,
     AppConfig,
+    MeasurementSample,
     MeasurementFrame,
     SamplingConfig,
 )
-from p_sensor.profiles import AppProfile
-from p_sensor.storage import CsvRecorder
+from p_sensor.profiles import AppProfile, IO_APP_PROFILE
+from p_sensor.services import MeasurementService
+from p_sensor.storage import CsvRecorder, prepare_session_paths
 
 
 class MainWindow(QMainWindow):
     SETTINGS_GROUP = "main_window"
     RANGE_OPTIONS = {"10 s": 10.0, "60 s": 60.0, "180 s": 180.0, "All": None}
 
-    def __init__(self, config: AppConfig, config_path: Path, profile: AppProfile) -> None:
+    def __init__(self, config: AppConfig, config_path: Path, profile: AppProfile = IO_APP_PROFILE) -> None:
         super().__init__()
         self.profile = profile
         self.setWindowTitle(profile.window_title)
@@ -73,6 +85,17 @@ class MainWindow(QMainWindow):
         self.settings = QSettings()
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll_frames)
+        self.automation_timer = QTimer(self)
+        self.automation_timer.timeout.connect(self._poll_automation_events)
+
+        self.automation_recipe_path: Path | None = None
+        self.automation_recipe = None
+        self.motion_config_path: Path | None = None
+        self.motion_config = None
+        self.automation_thread: threading.Thread | None = None
+        self.automation_stop_event = threading.Event()
+        self.automation_events: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.automation_last_result = None
 
         self.latest_inputs: dict[int, AnalogInputReading] = {}
         self.latest_outputs: dict[int, AnalogOutputState] = {}
@@ -111,6 +134,7 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self._build_ui()
+        self._init_compatibility_widgets()
         self._load_config_into_widgets(self.config)
         self._restore_window_preferences()
         self._reset_history()
@@ -120,6 +144,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._save_window_preferences()
+        self._request_stop_automation(wait=True)
         self._stop_measurement()
         super().closeEvent(event)
 
@@ -177,6 +202,18 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self.workspace_splitter, 1)
         self.setCentralWidget(central)
 
+    def _init_compatibility_widgets(self) -> None:
+        self.resistance_plot_checkbox = QCheckBox()
+        self.resistance_plot_checkbox.setChecked(True)
+        self.voltage_plot_checkbox = QCheckBox()
+        self.voltage_plot_checkbox.setChecked(True)
+        self.resistance_curves: dict[int, pg.PlotDataItem] = {}
+        self.voltage_curves: dict[int, pg.PlotDataItem] = {}
+        self.channel_table = QTableWidget()
+        self.channel_table.setColumnCount(2)
+        self.channel_detail_table = QTableWidget()
+        self.channel_detail_table.setColumnCount(5)
+
     def _build_status_bar(self) -> QWidget:
         bar = QFrame()
         layout = QHBoxLayout(bar)
@@ -220,6 +257,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         layout.addWidget(self._build_session_group())
+        layout.addWidget(self._build_automation_group())
         layout.addWidget(self._build_ai_group(), 1)
         self.ao_group = self._build_ao_group()
         self.ao_group.setVisible(self._supports_analog_output())
@@ -249,6 +287,8 @@ class MainWindow(QMainWindow):
         self.history_seconds_spin = QSpinBox()
         self.history_seconds_spin.setRange(10, 3600)
         self.history_seconds_spin.setSingleStep(10)
+        self.session_label_edit = QLineEdit()
+        self.session_label_edit.setPlaceholderText("Optional session label")
         self.export_path_edit = QLineEdit()
         self.export_path_edit.setReadOnly(True)
         browse_button = QPushButton("Browse")
@@ -266,6 +306,7 @@ class MainWindow(QMainWindow):
                 ("Acquisition Hz", self.acquisition_hz_spin),
                 ("Display Hz", self.display_hz_spin),
                 ("History Seconds", self.history_seconds_spin),
+                ("Session Label", self.session_label_edit),
             ]
         )
         for index, (text, widget) in enumerate(labels):
@@ -322,6 +363,61 @@ class MainWindow(QMainWindow):
         layout.addLayout(grid)
         layout.addLayout(button_row)
         layout.addLayout(mark_row)
+        return group
+
+    def _build_automation_group(self) -> QWidget:
+        group = QGroupBox("Automation")
+        layout = QVBoxLayout(group)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+
+        self.recipe_path_edit = QLineEdit()
+        self.recipe_path_edit.setReadOnly(True)
+        self.recipe_path_edit.setPlaceholderText("Select automation recipe JSON")
+        load_recipe_button = QPushButton("Load Recipe")
+        load_recipe_button.clicked.connect(self._load_automation_recipe_dialog)
+        self.load_recipe_button = load_recipe_button
+        self.motion_config_path_edit = QLineEdit()
+        self.motion_config_path_edit.setReadOnly(True)
+        self.motion_config_path_edit.setPlaceholderText("Optional SHOT-102 motion config JSON")
+        load_motion_button = QPushButton("Load Motion")
+        load_motion_button.clicked.connect(self._load_motion_config_dialog)
+        self.load_motion_button = load_motion_button
+
+        self.automation_status_label = QLabel("Idle")
+        self.automation_step_label = QLabel("No recipe loaded")
+        self.motion_status_label = QLabel("Motion bridge: disabled")
+        for widget in (self.automation_status_label, self.automation_step_label):
+            widget.setStyleSheet(
+                "padding: 4px 8px; border: 1px solid #30363D; border-radius: 6px; background: #161B22;"
+            )
+        self.motion_status_label.setStyleSheet(
+            "padding: 4px 8px; border: 1px solid #30363D; border-radius: 6px; background: #161B22;"
+        )
+
+        grid.addWidget(QLabel("Recipe"), 0, 0, 1, 2)
+        grid.addWidget(self.recipe_path_edit, 1, 0)
+        grid.addWidget(load_recipe_button, 1, 1)
+        grid.addWidget(QLabel("Motion Config"), 2, 0, 1, 2)
+        grid.addWidget(self.motion_config_path_edit, 3, 0)
+        grid.addWidget(load_motion_button, 3, 1)
+        grid.addWidget(QLabel("Status"), 4, 0)
+        grid.addWidget(QLabel("Current Step"), 4, 1)
+        grid.addWidget(self.automation_status_label, 5, 0)
+        grid.addWidget(self.automation_step_label, 5, 1)
+        grid.addWidget(self.motion_status_label, 6, 0, 1, 2)
+
+        button_row = QHBoxLayout()
+        self.run_automation_button = QPushButton("Run Automation")
+        self.stop_automation_button = QPushButton("Stop Automation")
+        self.run_automation_button.clicked.connect(self._start_automation)
+        self.stop_automation_button.clicked.connect(self._request_stop_automation)
+        button_row.addWidget(self.run_automation_button)
+        button_row.addWidget(self.stop_automation_button)
+
+        layout.addLayout(grid)
+        layout.addLayout(button_row)
         return group
 
     def _build_monitor_group(self) -> QWidget:
@@ -444,6 +540,7 @@ class MainWindow(QMainWindow):
         self._sync_physical_channels()
         self._rebuild_monitor_cards()
         self._rebuild_plot_curves()
+        self._rebuild_compatibility_widgets()
         self._refresh_input_table()
         self._refresh_output_table()
         self._refresh_monitor_cards()
@@ -635,10 +732,70 @@ class MainWindow(QMainWindow):
             self.ao_viewbox.addItem(self.output_curves[row])
         self._sync_plot_views()
 
+    def _rebuild_compatibility_widgets(self) -> None:
+        self.resistance_curves = {row: pg.PlotDataItem(symbol="o") for row in range(self.ai_table.rowCount())}
+        self.voltage_curves = {row: pg.PlotDataItem(symbol="o") for row in range(self.ai_table.rowCount())}
+
+        self.channel_table.setRowCount(self.ai_table.rowCount())
+        for row in range(self.ai_table.rowCount()):
+            name_item = QTableWidgetItem(self.ai_name_items[row].text())
+            toggle_button = QPushButton("Enabled")
+            toggle_button.setCheckable(True)
+            toggle_button.setChecked(self.ai_enabled_checks[row].isChecked())
+            toggle_button.clicked.connect(
+                lambda checked=False, row_index=row: self._set_channel_enabled_from_compat(row_index)
+            )
+            self.channel_table.setItem(row, 0, name_item)
+            self.channel_table.setCellWidget(row, 1, toggle_button)
+
+        self.channel_detail_table.setRowCount(self.ai_table.rowCount())
+        for row in range(self.ai_table.rowCount()):
+            module_number = (row // 4) + 1
+            sensor_port = (row % 4) + 1
+            self.channel_detail_table.setItem(row, 0, QTableWidgetItem(str(module_number)))
+            self.channel_detail_table.setItem(row, 1, QTableWidgetItem(str(sensor_port)))
+
+            bridge_combo = QComboBox()
+            bridge_combo.addItems(["quarter_bridge", "half_bridge", "full_bridge"])
+            bridge_combo.setCurrentText(self.config.ai_channels[row].bridge_type)
+            excitation_edit = QLineEdit(self._format_float_compact(self.config.ai_channels[row].excitation_voltage))
+            nominal_edit = QLineEdit(self._format_float_compact(self.config.ai_channels[row].nominal_resistance_ohm))
+            self.channel_detail_table.setCellWidget(row, 2, bridge_combo)
+            self.channel_detail_table.setCellWidget(row, 3, excitation_edit)
+            self.channel_detail_table.setCellWidget(row, 4, nominal_edit)
+
+    def _set_channel_enabled_from_compat(self, row_index: int) -> None:
+        button = self.channel_table.cellWidget(row_index, 1)
+        if isinstance(button, QPushButton):
+            self.ai_enabled_checks[row_index].setChecked(button.isChecked())
+            self._refresh_runtime_summary()
+
     def _config_from_ui(self) -> AppConfig:
         ai_channels: list[AnalogInputChannelConfig] = []
         ao_channels: list[AnalogOutputChannelConfig] = []
         for row in range(self.ai_table.rowCount()):
+            bridge_type = "quarter_bridge"
+            excitation_voltage = 5.0
+            nominal_resistance = 350.0
+            bridge_widget = self.channel_detail_table.cellWidget(row, 2) if self.channel_detail_table.rowCount() > row else None
+            excitation_widget = (
+                self.channel_detail_table.cellWidget(row, 3) if self.channel_detail_table.rowCount() > row else None
+            )
+            nominal_widget = (
+                self.channel_detail_table.cellWidget(row, 4) if self.channel_detail_table.rowCount() > row else None
+            )
+            if isinstance(bridge_widget, QComboBox):
+                bridge_type = bridge_widget.currentText()
+            if isinstance(excitation_widget, QLineEdit):
+                try:
+                    excitation_voltage = float(excitation_widget.text().strip() or "5.0")
+                except ValueError:
+                    excitation_voltage = 5.0
+            if isinstance(nominal_widget, QLineEdit):
+                try:
+                    nominal_resistance = float(nominal_widget.text().strip() or "350.0")
+                except ValueError:
+                    nominal_resistance = 350.0
             ai_channels.append(
                 AnalogInputChannelConfig(
                     enabled=self.ai_enabled_checks[row].isChecked(),
@@ -648,6 +805,9 @@ class MainWindow(QMainWindow):
                     offset=self.ai_offset_spins[row].value(),
                     engineering_unit=self.ai_unit_items[row].text().strip() or "V",
                     color=self.ai_color_by_row[row],
+                    bridge_type=bridge_type,
+                    excitation_voltage=excitation_voltage,
+                    nominal_resistance_ohm=nominal_resistance,
                 )
             )
         if self._supports_analog_output():
@@ -706,12 +866,22 @@ class MainWindow(QMainWindow):
         else:
             self.channel_summary_label.setText(f"AI {active_ai}")
         self.export_state_label.setText(self.export_path_edit.text() or DEFAULT_EXPORT_DIRECTORY)
+        for row in range(min(self.channel_table.rowCount(), len(self.ai_enabled_checks))):
+            button = self.channel_table.cellWidget(row, 1)
+            if isinstance(button, QPushButton):
+                button.setChecked(self.ai_enabled_checks[row].isChecked())
 
     def _update_runtime_controls(self) -> None:
         connected = self.controller is not None
         running = bool(self.controller and self.controller.is_running)
         paused = bool(self.controller and self.controller.is_paused)
-        if running and paused:
+        automation_running = self._is_automation_running()
+        automation_stopping = automation_running and self.automation_stop_event.is_set()
+        if automation_stopping:
+            state_text = "Automation Stopping"
+        elif automation_running:
+            state_text = "Automation Running"
+        elif running and paused:
             state_text = "Paused"
         elif running:
             state_text = "Running"
@@ -720,20 +890,30 @@ class MainWindow(QMainWindow):
         else:
             state_text = "Disconnected"
         self.session_state_label.setText(state_text)
-        self.connect_button.setEnabled(not running)
-        self.start_button.setEnabled(connected and not running)
-        self.pause_button.setEnabled(running and not paused)
-        self.resume_button.setEnabled(running and paused)
-        self.stop_button.setEnabled(connected or running or self.csv_recorder.is_active)
-        output_controls_enabled = self._supports_analog_output() and connected
+        manual_controls_enabled = not automation_running
+        self.connect_button.setEnabled(manual_controls_enabled and not running)
+        self.start_button.setEnabled(manual_controls_enabled and connected and not running)
+        self.pause_button.setEnabled(manual_controls_enabled and running and not paused)
+        self.resume_button.setEnabled(manual_controls_enabled and running and paused)
+        self.stop_button.setEnabled(manual_controls_enabled and (connected or running or self.csv_recorder.is_active))
+        output_controls_enabled = self._supports_analog_output() and connected and manual_controls_enabled
         self.apply_outputs_button.setEnabled(output_controls_enabled)
         self.zero_outputs_button.setEnabled(output_controls_enabled)
-        self.mark_start_button.setEnabled(running and not paused and self.active_highlight_start_s is None)
-        self.mark_stop_button.setEnabled(running and self.active_highlight_start_s is not None)
+        self.mark_start_button.setEnabled(manual_controls_enabled and running and not paused and self.active_highlight_start_s is None)
+        self.mark_stop_button.setEnabled(manual_controls_enabled and running and self.active_highlight_start_s is not None)
+        self.load_recipe_button.setEnabled(not automation_running)
+        self.load_motion_button.setEnabled(not automation_running)
+        self.run_automation_button.setEnabled(
+            not automation_running and self.automation_recipe is not None and not running
+        )
+        self.stop_automation_button.setEnabled(automation_running)
         if self.active_highlight_start_s is None:
             self.mark_state_label.setText(f"Marks {len(self.highlight_intervals)}")
         else:
             self.mark_state_label.setText(f"Marking {self.active_highlight_start_s:.3f}s")
+
+    def _is_automation_running(self) -> bool:
+        return self.automation_thread is not None and self.automation_thread.is_alive()
 
     def _make_backend(self, config: AppConfig):
         if config.backend == "simulation":
@@ -765,13 +945,21 @@ class MainWindow(QMainWindow):
             self._show_error("Connection Failed", str(exc))
 
     def _prepare_measurement_session(self, started_at: datetime) -> tuple[Path, Path]:
-        export_dir = resolve_runtime_path(self.config.export_directory)
-        export_dir.mkdir(parents=True, exist_ok=True)
-        session_dir = export_dir / started_at.strftime("session_%Y%m%d_%H%M%S")
-        session_dir.mkdir(parents=True, exist_ok=True)
-        return session_dir, session_dir / "measurement.csv"
+        session_label = self.session_label_edit.text().strip()
+        session_paths = prepare_session_paths(
+            self.config.export_directory,
+            started_at=started_at,
+            session_label=session_label,
+            session_prefix="session" if session_label else "measurement",
+        )
+        self._log(f"Export root created: {session_paths.export_root}")
+        self._log(f"Session directory created: {session_paths.session_dir}")
+        return session_paths.session_dir, session_paths.data_path
 
     def _start_measurement(self) -> None:
+        if self._is_automation_running():
+            self._show_error("Automation Running", "Stop automation before starting manual measurement.")
+            return
         if not self._apply_ui_config():
             return
         try:
@@ -975,6 +1163,23 @@ class MainWindow(QMainWindow):
                 latest_elapsed = values[-1][0]
                 values = [item for item in values if latest_elapsed - item[0] <= range_limit]
             curve.setData([item[0] for item in values], [item[1] for item in values])
+        for row in range(self.ai_table.rowCount()):
+            values = list(self.history.get(row, deque()))
+            if range_limit is not None and values:
+                latest_elapsed = values[-1][0]
+                values = [item for item in values if latest_elapsed - item[0] <= range_limit]
+            resistance_curve = self.resistance_curves.get(row)
+            voltage_curve = self.voltage_curves.get(row)
+            if resistance_curve is not None:
+                if self.resistance_plot_checkbox.isChecked() and self.ai_enabled_checks[row].isChecked():
+                    resistance_curve.setData([item[0] for item in values], [item[2] for item in values], symbol="o")
+                else:
+                    resistance_curve.setData([], [])
+            if voltage_curve is not None:
+                if self.voltage_plot_checkbox.isChecked() and self.ai_enabled_checks[row].isChecked():
+                    voltage_curve.setData([item[0] for item in values], [item[1] for item in values], symbol="o")
+                else:
+                    voltage_curve.setData([], [])
         self.plot_widget.getPlotItem().vb.autoRange()
         if show_ao_overlay:
             self.ao_viewbox.autoRange()
@@ -1048,6 +1253,9 @@ class MainWindow(QMainWindow):
         if self.controller and self.controller.is_running:
             self._show_error("Load Blocked", "Stop the measurement before loading a configuration.")
             return
+        if self._is_automation_running():
+            self._show_error("Load Blocked", "Stop automation before loading a configuration.")
+            return
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Load Config",
@@ -1090,9 +1298,229 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_output.appendPlainText(f"[{timestamp}] {message}")
 
+    def _process_sample(self, sample: MeasurementSample) -> None:
+        frame = MeasurementFrame(
+            timestamp=sample.timestamp,
+            elapsed_s=sample.elapsed_s,
+            inputs=[
+                AnalogInputReading(
+                    channel_index=reading.channel_index,
+                    channel_name=reading.channel_name,
+                    voltage=reading.voltage,
+                    scaled_value=reading.resistance_ohm,
+                    unit="ohm",
+                    status=reading.status,
+                )
+                for reading in sample.readings
+            ],
+            outputs=[],
+        )
+        self._process_frame(frame)
+        self._refresh_input_table()
+        self._refresh_monitor_cards()
+
+    def _stop_recorder(self) -> None:
+        summary = self.csv_recorder.stop()
+        if summary is not None:
+            self._log(f"CSV closed: {summary.path} (rows={summary.rows_written})")
+
     def _show_error(self, title: str, message: str) -> None:
         self._log(f"{title}: {message}")
         QMessageBox.critical(self, title, message)
+
+    def _load_automation_recipe_dialog(self) -> None:
+        if self._is_automation_running():
+            self._show_error("Automation Running", "Stop automation before loading another recipe.")
+            return
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Automation Recipe",
+            str(resolve_runtime_path("config")),
+            "JSON Files (*.json)",
+        )
+        if not file_path:
+            return
+        try:
+            recipe_path = resolve_runtime_path(file_path)
+            recipe = load_recipe(recipe_path)
+            self.automation_recipe_path = recipe_path
+            self.automation_recipe = recipe
+            self.recipe_path_edit.setText(str(recipe_path))
+            self.automation_status_label.setText("Ready")
+            self.automation_step_label.setText(f"{recipe.recipe_id} ({len(recipe.steps)} steps)")
+            self._update_runtime_controls()
+            self._log(f"Automation recipe loaded: {recipe_path}")
+        except Exception as exc:
+            self._show_error("Recipe Load Failed", str(exc))
+
+    def _load_motion_config_dialog(self) -> None:
+        if self._is_automation_running():
+            self._show_error("Automation Running", "Stop automation before loading another motion configuration.")
+            return
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Motion Config",
+            str(resolve_runtime_path("config")),
+            "JSON Files (*.json)",
+        )
+        if not file_path:
+            return
+        try:
+            motion_path = resolve_runtime_path(file_path)
+            motion_config = load_shot102_motion_config(motion_path)
+            self.motion_config_path = motion_path
+            self.motion_config = motion_config
+            self.motion_config_path_edit.setText(str(motion_path))
+            self.motion_status_label.setText(
+                f"{motion_config.controller_model} {motion_config.port} axis {motion_config.axis}"
+            )
+            self._update_runtime_controls()
+            self._log(f"Motion config loaded: {motion_path}")
+        except Exception as exc:
+            self._show_error("Motion Config Load Failed", str(exc))
+
+    def _start_automation(self) -> None:
+        if self._is_automation_running():
+            return
+        if self.controller and self.controller.is_running:
+            self._show_error("Measurement Running", "Stop manual measurement before running automation.")
+            return
+        if self.automation_recipe is None:
+            self._show_error("Recipe Missing", "Load an automation recipe before running automation.")
+            return
+        if not self._apply_ui_config(reset_history=False):
+            return
+
+        self.automation_stop_event = threading.Event()
+        self.automation_events = queue.Queue()
+        self.automation_last_result = None
+        recipe = self.automation_recipe
+        options = AutomationSessionOptions(
+            export_directory=self.config.export_directory,
+            session_label=self.session_label_edit.text(),
+            metadata={
+                "backend": self.config.backend,
+                "chassis_name": self.config.chassis_name,
+                "recipe_path": str(self.automation_recipe_path) if self.automation_recipe_path is not None else "",
+                "motion_config_path": str(self.motion_config_path) if self.motion_config_path is not None else "",
+            },
+        )
+        backend = self._make_backend(self.config)
+        measurement_service = MeasurementService(backend, self.config.sampling.acquisition_hz)
+        command_bridge = self._make_automation_command_bridge()
+        runner = ExperimentRunner(
+            measurement_service,
+            command_bridge=command_bridge,
+            event_callback=self._queue_automation_event,
+            stop_event=self.automation_stop_event,
+        )
+
+        def run_automation() -> None:
+            try:
+                result = runner.run(recipe, options)
+            except AutomationCancelledError as exc:
+                self.automation_events.put(("cancelled", str(exc)))
+            except Exception as exc:
+                self.automation_events.put(("failed", str(exc)))
+            else:
+                self.automation_events.put(("completed", result))
+
+        self.automation_thread = threading.Thread(target=run_automation, daemon=True)
+        self.automation_status_label.setText("Running")
+        self.automation_step_label.setText("Initializing")
+        self.automation_thread.start()
+        self.automation_timer.start(100)
+        self._update_runtime_controls()
+        self._log("Automation run started")
+
+    def _make_automation_command_bridge(self):
+        if self.motion_config is None:
+            self.motion_status_label.setText("Motion bridge: disabled")
+            return NoOpCommandBridge()
+        controller = Shot102Controller(self.motion_config)
+        self.motion_status_label.setText(
+            f"{self.motion_config.controller_model} {self.motion_config.port} axis {self.motion_config.axis}"
+        )
+        return Shot102CommandBridge(controller)
+
+    def _request_stop_automation(self, *_args, wait: bool = False) -> None:
+        if not self._is_automation_running():
+            return
+        if not self.automation_stop_event.is_set():
+            self.automation_stop_event.set()
+            self.automation_status_label.setText("Stopping")
+            self._log("Automation stop requested")
+            self._update_runtime_controls()
+        if wait and self.automation_thread is not None:
+            self.automation_thread.join(timeout=2.0)
+
+    def _queue_automation_event(self, event_name: str, payload: dict) -> None:
+        self.automation_events.put(("event", (event_name, payload)))
+
+    def _poll_automation_events(self) -> None:
+        while True:
+            try:
+                kind, payload = self.automation_events.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "event":
+                event_name, event_payload = payload
+                self._handle_automation_event(event_name, event_payload)
+            elif kind == "completed":
+                self.automation_last_result = payload
+                self.automation_status_label.setText("Completed")
+                self.automation_step_label.setText(
+                    f"{len(payload.step_results)} steps -> {payload.session_dir.name}"
+                )
+                self._log(f"Automation completed: {payload.session_dir}")
+            elif kind == "cancelled":
+                self.automation_status_label.setText("Cancelled")
+                self.automation_step_label.setText("Stopped by user")
+                self._log(str(payload))
+            elif kind == "failed":
+                self.automation_status_label.setText("Failed")
+                self.automation_step_label.setText("Execution error")
+                self._show_error("Automation Failed", str(payload))
+
+        if self.automation_thread is not None and not self.automation_thread.is_alive():
+            self.automation_timer.stop()
+            self.automation_thread = None
+            self._update_runtime_controls()
+
+    def _handle_automation_event(self, event_name: str, payload: dict) -> None:
+        if event_name == "session_started":
+            self.automation_status_label.setText("Running")
+            self.automation_step_label.setText(payload["session_id"])
+            self._log(f"Automation session created: {payload['session_dir']}")
+            return
+        if event_name == "motion_connected":
+            self.motion_status_label.setText(payload["message"])
+            self._log(payload["message"])
+            return
+        if event_name == "step_started":
+            self.automation_status_label.setText("Running")
+            self.automation_step_label.setText(f"Step {payload['step_index']}: {payload['step_id']}")
+            self._log(
+                f"Automation step started: {payload['step_id']} target={payload['target_displacement']}"
+            )
+            return
+        if event_name == "step_completed":
+            self._log(
+                f"Automation step completed: {payload['step_id']} -> {payload['measurement_file']} "
+                f"({payload['frame_count']} frames)"
+            )
+            return
+        if event_name == "session_completed":
+            self._log(
+                f"Automation session completed: {payload['session_id']} ({payload['step_count']} steps)"
+            )
+            return
+        if event_name == "session_cancelled":
+            self._log(f"Automation session cancelled: {payload['session_id']}")
+            return
+        if event_name == "session_failed":
+            self._log(f"Automation session failed: {payload['session_id']}")
+            return
 
     def _readonly_item(self, text: str) -> QTableWidgetItem:
         item = QTableWidgetItem(text)
@@ -1123,6 +1551,11 @@ class MainWindow(QMainWindow):
         spin.setSingleStep(step)
         return spin
 
+    def _format_float_compact(self, value: float) -> str:
+        if float(value).is_integer():
+            return str(int(value))
+        return f"{value:g}"
+
     def _sync_plot_views(self) -> None:
         plot_viewbox = self.plot_widget.getPlotItem().vb
         self.ao_viewbox.setGeometry(plot_viewbox.sceneBoundingRect())
@@ -1149,6 +1582,7 @@ class MainWindow(QMainWindow):
         range_text = self.settings.value("range_text")
         ai_plot_mode = self.settings.value("ai_plot_mode")
         ao_overlay = self.settings.value("ao_overlay")
+        session_label = self.settings.value("session_label")
         self.settings.endGroup()
 
         if geometry is not None:
@@ -1170,6 +1604,12 @@ class MainWindow(QMainWindow):
             self.ai_plot_mode_combo.setCurrentText(str(ai_plot_mode))
         if ao_overlay is not None:
             self.ao_overlay_checkbox.setChecked(str(ao_overlay).lower() == "true")
+        if session_label is not None:
+            self.session_label_edit.setText(str(session_label))
+        try:
+            self.config = self._config_from_ui()
+        except Exception:
+            pass
 
     def _restore_check_states(self, raw_value, checkboxes: list[QCheckBox]) -> None:
         if not raw_value:
@@ -1189,5 +1629,6 @@ class MainWindow(QMainWindow):
         self.settings.setValue("range_text", self.range_combo.currentText())
         self.settings.setValue("ai_plot_mode", self.ai_plot_mode_combo.currentText())
         self.settings.setValue("ao_overlay", self.ao_overlay_checkbox.isChecked())
+        self.settings.setValue("session_label", self.session_label_edit.text())
         self.settings.endGroup()
         self.settings.sync()

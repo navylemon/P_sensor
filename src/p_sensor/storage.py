@@ -2,17 +2,66 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from p_sensor.models import AnalogInputChannelConfig, AnalogOutputChannelConfig, MeasurementFrame
+from p_sensor.config import resolve_runtime_path
 
 
 @dataclass(slots=True)
 class CsvRecorderSummary:
     path: Path
     rows_written: int
+
+
+@dataclass(slots=True)
+class SessionPaths:
+    session_id: str
+    export_root: Path
+    session_dir: Path
+    data_path: Path
+
+
+_NON_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def normalize_session_label(label: str | None) -> str | None:
+    if label is None:
+        return None
+    cleaned = _NON_FILENAME_CHARS.sub("_", label.strip())
+    cleaned = cleaned.strip("._-")
+    return cleaned or None
+
+
+def build_session_identifier(label: str | None, started_at: datetime) -> str:
+    timestamp = started_at.strftime("%Y%m%d_%H%M%S")
+    normalized = normalize_session_label(label)
+    return timestamp if normalized is None else f"{normalized}_{timestamp}"
+
+
+def prepare_session_paths(
+    export_directory: str | Path,
+    *,
+    started_at: datetime,
+    session_label: str | None = None,
+    session_prefix: str = "session",
+    data_file_name: str = "measurement.csv",
+) -> SessionPaths:
+    export_root = resolve_runtime_path(export_directory)
+    export_root.mkdir(parents=True, exist_ok=True)
+    session_id = build_session_identifier(session_label, started_at)
+    session_dir = export_root / f"{session_prefix}_{session_id}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return SessionPaths(
+        session_id=session_id,
+        export_root=export_root,
+        session_dir=session_dir,
+        data_path=session_dir / data_file_name,
+    )
 
 
 class CsvRecorder:
@@ -46,7 +95,7 @@ class CsvRecorder:
         self,
         file_path: str | Path,
         ai_channels: list[AnalogInputChannelConfig],
-        ao_channels: list[AnalogOutputChannelConfig],
+        ao_channels: list[AnalogOutputChannelConfig] | None = None,
     ) -> CsvRecorderSummary:
         if self._file is not None:
             self.stop()
@@ -63,7 +112,7 @@ class CsvRecorder:
             started_at = time.monotonic()
             self._last_flush_monotonic = started_at
             self._last_fsync_monotonic = started_at
-            self._write_header(ai_channels, ao_channels)
+            self._write_header(ai_channels, ao_channels or [])
         except Exception as exc:
             self.stop()
             raise OSError(f"Failed to initialize CSV recorder at {path}: {exc}") from exc

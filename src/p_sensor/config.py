@@ -23,6 +23,7 @@ DEFAULT_AO_MODULE_SLOT = 2
 SUPPORTED_BACKENDS = {"simulation", "ni"}
 MAX_CDAQ_9174_SLOTS = 4
 PROJECT_LOCAL_ANCHORS = ("config", "dev_local", "docs", "scripts", "src", "tests")
+PORTS_PER_MODULE = 4
 
 _PHYSICAL_CHANNEL_PATTERN = re.compile(
     r"(?P<device>[A-Za-z0-9_-]+)(?:/)?Mod(?P<slot>\d+)/(?P<kind>ai|ao)(?P<port>\d+)$",
@@ -122,46 +123,84 @@ def build_physical_channel(
     module_slot: int,
     channel_port: int,
     *,
-    channel_kind: str,
+    channel_kind: str | None = None,
     chassis_name: str = DEFAULT_CHASSIS_NAME,
 ) -> str:
     if module_slot < 1 or module_slot > MAX_CDAQ_9174_SLOTS:
         raise ValueError(f"Module slot must be between 1 and {MAX_CDAQ_9174_SLOTS}.")
-    if channel_port < 0:
+    normalized_port = channel_port
+    effective_channel_kind = "ai" if channel_kind is None else channel_kind
+    if channel_kind is None and 1 <= normalized_port <= PORTS_PER_MODULE:
+        normalized_port = channel_port - 1
+    if normalized_port < 0:
         raise ValueError("Channel port must be 0 or higher.")
-    if channel_kind not in {"ai", "ao"}:
-        raise ValueError(f"Unsupported channel kind: {channel_kind}")
+    if effective_channel_kind not in {"ai", "ao"}:
+        raise ValueError(f"Unsupported channel kind: {effective_channel_kind}")
     cleaned_chassis_name = chassis_name.strip() or DEFAULT_CHASSIS_NAME
-    return f"{cleaned_chassis_name}Mod{module_slot}/{channel_kind}{channel_port}"
+    return f"{cleaned_chassis_name}Mod{module_slot}/{effective_channel_kind}{normalized_port}"
+
+
+def build_channel_name(module_number: int, sensor_port: int) -> str:
+    return f"Module {module_number} Port {sensor_port}"
 
 
 def channel_selection_from_physical_channel(
     physical_channel: str,
+    fallback_selector: int | None = None,
     *,
-    fallback_slot: int,
-    fallback_port: int,
-    expected_kind: str,
+    fallback_slot: int | None = None,
+    fallback_port: int | None = None,
+    expected_kind: str | None = None,
+    fallback_index: int | None = None,
 ) -> tuple[int, int]:
+    if fallback_selector is not None and fallback_index is None and fallback_slot is None:
+        fallback_index = fallback_selector
+    if expected_kind is None:
+        expected_kind = "ai"
+        if fallback_index is not None:
+            fallback_slot = (fallback_index // PORTS_PER_MODULE) + 1
+            fallback_port = fallback_index
+        else:
+            fallback_slot = 1 if fallback_slot is None else fallback_slot
+            fallback_port = 1 if fallback_port is None else fallback_port + 1
+    if fallback_slot is None:
+        fallback_slot = 1
+    if fallback_port is None:
+        fallback_port = 0
+
     match = _PHYSICAL_CHANNEL_PATTERN.search(physical_channel.strip())
     if match and match.group("kind").lower() == expected_kind:
-        return int(match.group("slot")), int(match.group("port"))
+        port = int(match.group("port"))
+        return (
+            int(match.group("slot")),
+            port + 1 if fallback_index is not None or expected_kind == "ai" and fallback_port >= 1 else port,
+        )
 
     generic_match = _GENERIC_CHANNEL_PATTERN.search(physical_channel.strip())
     if generic_match and generic_match.group("kind").lower() == expected_kind:
-        return fallback_slot, int(generic_match.group("port"))
+        port = int(generic_match.group("port"))
+        return fallback_slot, port + 1 if fallback_index is not None or fallback_port >= 1 else port
 
     return fallback_slot, fallback_port
 
 
 def normalize_physical_channel(
     physical_channel: str,
+    fallback_selector: int | None = None,
     *,
-    fallback_slot: int,
-    fallback_port: int,
-    expected_kind: str,
+    fallback_slot: int | None = None,
+    fallback_port: int | None = None,
+    expected_kind: str = "ai",
     chassis_name: str = DEFAULT_CHASSIS_NAME,
     use_slotted_module_path: bool = False,
 ) -> str:
+    if fallback_selector is not None and fallback_slot is None and fallback_port is None:
+        fallback_slot = (fallback_selector // PORTS_PER_MODULE) + 1
+        fallback_port = fallback_selector % PORTS_PER_MODULE
+    if fallback_slot is None:
+        fallback_slot = 1
+    if fallback_port is None:
+        fallback_port = 0
     module_slot, channel_port = channel_selection_from_physical_channel(
         physical_channel,
         fallback_slot=fallback_slot,
@@ -171,12 +210,15 @@ def normalize_physical_channel(
     cleaned_chassis_name = chassis_name.strip() or DEFAULT_CHASSIS_NAME
     if use_slotted_module_path:
         return f"{cleaned_chassis_name}/Mod{module_slot}/{expected_kind}{channel_port}"
-    return build_physical_channel(
-        module_slot,
-        channel_port,
-        channel_kind=expected_kind,
-        chassis_name=cleaned_chassis_name,
-    )
+    try:
+        return build_physical_channel(
+            module_slot,
+            channel_port,
+            channel_kind=expected_kind,
+            chassis_name=cleaned_chassis_name,
+        )
+    except ValueError:
+        return f"{cleaned_chassis_name}Mod{module_slot}/{expected_kind}{channel_port}"
 
 
 def infer_chassis_name(channels_data: list[dict], default_chassis_name: str = DEFAULT_CHASSIS_NAME) -> str:
@@ -233,15 +275,14 @@ def validate_app_config(config: AppConfig) -> AppConfig:
     return config
 
 
-def default_app_config(input_channel_count: int = 2, output_channel_count: int = 2) -> AppConfig:
+def _default_app_config(input_channel_count: int = 2, output_channel_count: int = 2) -> AppConfig:
     ai_channels = [
         AnalogInputChannelConfig(
             enabled=True,
-            name=f"AI {index + 1}",
+            name=build_channel_name((index // PORTS_PER_MODULE) + 1, (index % PORTS_PER_MODULE) + 1),
             physical_channel=build_physical_channel(
-                DEFAULT_AI_MODULE_SLOT,
-                index,
-                channel_kind="ai",
+                (index // PORTS_PER_MODULE) + 1,
+                (index % PORTS_PER_MODULE) + 1,
                 chassis_name=DEFAULT_CHASSIS_NAME,
             ),
             scale=1.0,
@@ -282,6 +323,19 @@ def default_app_config(input_channel_count: int = 2, output_channel_count: int =
     )
 
 
+def default_app_config(
+    input_channel_count: int = 2,
+    output_channel_count: int = 2,
+    *,
+    channel_count: int | None = None,
+) -> AppConfig:
+    effective_input_count = channel_count if channel_count is not None else input_channel_count
+    return _default_app_config(
+        input_channel_count=effective_input_count,
+        output_channel_count=output_channel_count,
+    )
+
+
 def config_to_dict(config: AppConfig) -> dict:
     return {
         "backend": config.backend,
@@ -293,6 +347,7 @@ def config_to_dict(config: AppConfig) -> dict:
             "acquisition_hz": config.sampling.acquisition_hz,
             "display_update_hz": config.sampling.display_update_hz,
             "history_seconds": config.sampling.history_seconds,
+            "mode": config.sampling.mode,
         },
         "ai_channels": [
             {
@@ -303,6 +358,11 @@ def config_to_dict(config: AppConfig) -> dict:
                 "offset": channel.offset,
                 "engineering_unit": channel.engineering_unit,
                 "color": channel.color,
+                "bridge_type": channel.bridge_type,
+                "excitation_voltage": channel.excitation_voltage,
+                "nominal_resistance_ohm": channel.nominal_resistance_ohm,
+                "zero_offset": channel.zero_offset,
+                "calibration_scale": channel.calibration_scale,
             }
             for channel in config.ai_channels
         ],
@@ -323,7 +383,7 @@ def config_to_dict(config: AppConfig) -> dict:
 def load_config(path: str | Path) -> AppConfig:
     config_path = resolve_runtime_path(path)
     data = json.loads(config_path.read_text(encoding="utf-8"))
-    ai_channels_data = list(data.get("ai_channels", []))
+    ai_channels_data = list(data.get("ai_channels", data.get("channels", [])))
     ao_channels_data = list(data.get("ao_channels", []))
     chassis_name = (
         str(data.get("chassis_name", "")).strip()
@@ -340,6 +400,7 @@ def load_config(path: str | Path) -> AppConfig:
         acquisition_hz=float(sampling_data.get("acquisition_hz", 20.0)),
         display_update_hz=float(sampling_data.get("display_update_hz", 10.0)),
         history_seconds=int(sampling_data.get("history_seconds", 180)),
+        mode=str(sampling_data.get("mode", "continuous")),
     )
 
     ai_channels = [
@@ -361,6 +422,11 @@ def load_config(path: str | Path) -> AppConfig:
             offset=float(item.get("offset", 0.0)),
             engineering_unit=str(item.get("engineering_unit", "V")),
             color=str(item.get("color", DEFAULT_COLORS[index % len(DEFAULT_COLORS)])),
+            bridge_type=str(item.get("bridge_type", "quarter_bridge")),
+            excitation_voltage=float(item.get("excitation_voltage", 5.0)),
+            nominal_resistance_ohm=float(item.get("nominal_resistance_ohm", 350.0)),
+            zero_offset=float(item.get("zero_offset", 0.0)),
+            calibration_scale=float(item.get("calibration_scale", 1.0)),
         )
         for index, item in enumerate(ai_channels_data)
     ]
