@@ -13,7 +13,6 @@
   "files.exclude": {
     "**/tests": true,
     "**/examples": true,
-    "**/dev_local": true,
     "**/.venv_broken": true,
     "**/pytest-cache-files-*": true,
     "**/__pycache__": true

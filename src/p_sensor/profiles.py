@@ -39,12 +39,26 @@ AI_MONITOR_PROFILE = AppProfile(
 )
 
 
+AUTOMATION_PROFILE = AppProfile(
+    profile_id="automation_console",
+    application_name="P_sensor_Automation",
+    window_title="P_sensor Automation",
+    config_path=APP_ROOT / "config" / "channel_settings_automation.example.json",
+    supports_analog_output=False,
+    default_input_channel_count=2,
+    default_output_channel_count=0,
+)
+
+
 PROFILE_ALIASES: dict[str, AppProfile] = {
     "io": IO_APP_PROFILE,
     "io_console": IO_APP_PROFILE,
     "default": IO_APP_PROFILE,
     "ai": AI_MONITOR_PROFILE,
     "ai_monitor": AI_MONITOR_PROFILE,
+    "automation": AUTOMATION_PROFILE,
+    "automation_console": AUTOMATION_PROFILE,
+    "auto": AUTOMATION_PROFILE,
 }
 
 

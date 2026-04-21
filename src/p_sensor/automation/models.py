@@ -60,6 +60,9 @@ class AutomationStepResult:
     step_index: int
     step_id: str
     target_displacement: float | None
+    position_before_mm: float | None
+    position_after_engage_mm: float | None
+    position_after_disengage_mm: float | None
     measurement_file: str
     started_at: datetime
     ended_at: datetime

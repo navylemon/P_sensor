@@ -98,6 +98,9 @@ class AutomationSessionStore:
         step: AutomationStep,
         measurement_path: Path,
         window_result: MeasurementWindowResult,
+        position_before_mm: float | None = None,
+        position_after_engage_mm: float | None = None,
+        position_after_disengage_mm: float | None = None,
         status: str = "completed",
     ) -> AutomationStepResult:
         average_inputs = {
@@ -115,6 +118,9 @@ class AutomationSessionStore:
             step_index=step_index,
             step_id=step.step_id,
             target_displacement=step.target_displacement,
+            position_before_mm=position_before_mm,
+            position_after_engage_mm=position_after_engage_mm,
+            position_after_disengage_mm=position_after_disengage_mm,
             measurement_file=measurement_path.name,
             started_at=window_result.started_at,
             ended_at=window_result.ended_at,
@@ -143,6 +149,9 @@ class AutomationSessionStore:
             "step_index",
             "step_id",
             "target_displacement",
+            "position_before_mm",
+            "position_after_engage_mm",
+            "position_after_disengage_mm",
             "measurement_file",
             "started_at",
             "ended_at",
@@ -167,6 +176,9 @@ class AutomationSessionStore:
             str(result.step_index),
             result.step_id,
             "" if result.target_displacement is None else f"{result.target_displacement:.6f}",
+            self._format_optional_float(result.position_before_mm),
+            self._format_optional_float(result.position_after_engage_mm),
+            self._format_optional_float(result.position_after_disengage_mm),
             result.measurement_file,
             result.started_at.isoformat(timespec="milliseconds"),
             result.ended_at.isoformat(timespec="milliseconds"),
@@ -193,3 +205,6 @@ class AutomationSessionStore:
             average_current = result.average_outputs.get(channel.name)
             row.append("" if average_current is None else f"{average_current:.6f}")
         return row
+
+    def _format_optional_float(self, value: float | None) -> str:
+        return "" if value is None else f"{value:.6f}"

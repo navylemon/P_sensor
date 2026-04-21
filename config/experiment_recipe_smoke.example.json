@@ -1,0 +1,18 @@
+{
+  "recipe_id": "shot702_smoke",
+  "metadata": {
+    "description": "Single-step smoke recipe for SHOT-702 orchestration verification."
+  },
+  "steps": [
+    {
+      "step_id": "smoke_001",
+      "target_displacement": 0.5,
+      "settle_time_s": 0.2,
+      "measure_frame_count": 5,
+      "disengage_after_measure": true,
+      "post_disengage_wait_s": 0.1,
+      "ready_timeout_s": 10.0,
+      "notes": "Move to 0.5 mm, collect a short measurement window, then return to disengage position."
+    }
+  ]
+}

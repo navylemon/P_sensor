@@ -1,0 +1,33 @@
+{
+  "backend": "simulation",
+  "chassis_name": "cDAQ1",
+  "ai_module_slot": 1,
+  "ao_module_slot": 2,
+  "export_directory": "dev_local/exports",
+  "sampling": {
+    "acquisition_hz": 20.0,
+    "display_update_hz": 10.0,
+    "history_seconds": 180
+  },
+  "ai_channels": [
+    {
+      "enabled": true,
+      "name": "Sensor 1",
+      "physical_channel": "cDAQ1Mod1/ai0",
+      "scale": 1.0,
+      "offset": 0.0,
+      "engineering_unit": "V",
+      "color": "#3A7CA5"
+    },
+    {
+      "enabled": true,
+      "name": "Sensor 2",
+      "physical_channel": "cDAQ1Mod1/ai1",
+      "scale": 1.0,
+      "offset": 0.0,
+      "engineering_unit": "V",
+      "color": "#E63946"
+    }
+  ],
+  "ao_channels": []
+}

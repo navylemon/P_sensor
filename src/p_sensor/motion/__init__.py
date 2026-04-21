@@ -1,4 +1,5 @@
 from p_sensor.motion.shot102 import (
+    MotionError,
     Shot102CommandBridge,
     Shot102Controller,
     Shot102MotionConfig,
@@ -8,6 +9,7 @@ from p_sensor.motion.shot102 import (
 )
 
 __all__ = [
+    "MotionError",
     "Shot102CommandBridge",
     "Shot102Controller",
     "Shot102MotionConfig",

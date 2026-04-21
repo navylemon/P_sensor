@@ -1,6 +1,6 @@
 # 저항 기반 센서 측정 GUI 프로그램 명세 및 진행 현황
 
-최종 갱신: 2026-04-14
+최종 갱신: 2026-04-20
 
 ## 1. 문서 목적
 
@@ -17,7 +17,7 @@
 - GUI 스택: `PySide6`, `pyqtgraph`
 - DAQ 제어: `nidaqmx`
 - 확장 방향: 리니어 스테이지 연동 자동화와 단계형 실험 실행
-- 자동화 기준 스테이지/컨트롤러: `SIGMAKOKI SGSP20-85` + `SIGMAKOKI SHOT-102`
+- 자동화 기준 스테이지/컨트롤러: `OPTOSIGMA OSMS20-35` + `OPTOSIGMA SHOT-702`
 
 ## 3. 현재 구현 범위
 
@@ -38,9 +38,15 @@
 - 창 geometry 및 splitter 상태 복원
 - 기본 테스트 실행 환경
 - 자동화 레시피 로드와 백그라운드 실행
+- 변위 시작점/종료점/step 크기 기반 레시피 생성 헬퍼
 - 자동화 세션 폴더, `session_manifest.json`, `step_summary.csv`, `measurement_XXXX.csv` 저장
-- `SIGMAKOKI SHOT-102` 기반 리니어 스테이지 명령 브리지
-- `SIGMAKOKI SGSP20-85` 변위 기준 `mm -> pulse` 환산 이동
+- `OPTOSIGMA SHOT-702` 기반 리니어 스테이지 설정과 SHOT 계열 명령 브리지
+- `OPTOSIGMA OSMS20-35` 변위 기준 `mm -> pulse` 환산 이동
+- `SHOT-702`/`SHOT-102` 수동 점검 CLI와 PowerShell 실행 스크립트
+- 실장비 기준 SHOT 계열 연결, status 조회, 상대 이동, 방향키 jog, origin 복귀 검증
+- 자동화 step 결과와 `step_summary.csv`에 모션 위치(`position_before_mm`, `position_after_engage_mm`, `position_after_disengage_mm`) 기록
+- 자동화 안전 정책(`AutomationSafetyPolicy`) 기반 목표 변위와 실제 위치 소프트 리밋 검증
+- 자동화 smoke CLI와 `0.5 mm -> 측정 창 -> 0.0 mm` 실장비 오케스트레이션 검증
 
 ### 3.2 부분 구현
 
@@ -48,7 +54,7 @@
 - 채널별 상세 파라미터는 설정 파일에서 관리되며, GUI에서 편집 가능한 항목은 아직 제한적이다.
 - 16채널 확장 전제는 코드 구조상 열려 있으나, 현재 기본 예제와 테스트는 8채널 중심이다.
 - 자동화 UI는 `main_window.py` 안에 통합되어 있으며, 전용 패널 모듈 분리는 아직 진행 전이다.
-- 자동화 안전 계층은 기본 중단/타임아웃 수준이고, 소프트 리밋과 인터락 전담 모듈은 아직 없다.
+- 자동화 안전 계층은 기본 중단/타임아웃과 모션 설정 소프트 리밋 수준이다. 사용자 확인형 인터락과 복구 절차 표준화는 아직 없다.
 
 ### 3.3 미구현 또는 후순위
 
@@ -76,9 +82,11 @@
 - 표시 주기(`Display Hz`)
 - 모듈/포트별 활성화 토글
 - 자동화 레시피 로드(`Load Recipe`)
+- 자동화 레시피 생성 헬퍼(`Recipe Helper`)
 - 모션 설정 로드(`Load Motion`)
 - 자동화 실행/중단(`Run Automation`, `Stop Automation`)
 - 자동화 상태와 현재 step 표시
+- AO 없는 자동화 전용 프로필과 실행 진입점
 
 파일 메뉴에서 다음 작업을 수행할 수 있다.
 
@@ -155,7 +163,7 @@
 
 현재 확인된 자동 테스트 범위는 주로 채널 매핑/정규화 관련 테스트다. GUI, CSV 저장, NI 실제 하드웨어 경로는 수동 검증 비중이 높다.
 
-현재 자동 테스트에는 자동화 레시피 로드, 자동화 러너, 자동화 패널, 세션 저장 경로, `SHOT-102` 모션 어댑터 단위 테스트가 포함된다. 반면 NI 실장비 연동, 실제 `SHOT-102` 직렬 통신, 홈/이동/정지 시퀀스는 아직 수동 하드웨어 검증 대상이다.
+현재 자동 테스트에는 자동화 레시피 로드, 자동화 러너, 자동화 패널, 세션 저장 경로, SHOT 계열 모션 어댑터 단위 테스트가 포함된다. NI 실장비 연동은 아직 수동 검증 비중이 높다. 실제 `SHOT-102` 직렬 통신은 2026-04-20 기준 `COM10`에서 status 조회, 상대 이동, 방향키 jog, origin 복귀까지 수동 검증을 완료했다.
 
 ## 9. 현재 구현 기준 아키텍처
 
@@ -183,10 +191,16 @@
   자동화 레시피 JSON 로드
 - `src/p_sensor/automation/runner.py`
   자동화 오케스트레이션과 step 실행 상태 관리
+- `src/p_sensor/automation/safety.py`
+  자동화 목표 변위와 실제 모션 위치 소프트 리밋 검증
+- `src/p_sensor/automation/smoke_cli.py`
+  시뮬레이션 DAQ와 선택적 SHOT 계열 모션을 사용한 자동화 smoke 실행기
 - `src/p_sensor/automation/storage.py`
   자동화 세션 폴더, manifest, summary, 측정 CSV 저장
 - `src/p_sensor/motion/shot102.py`
-  `SHOT-102` 직렬 제어와 `SGSP20-85` 기준 명령 브리지
+  SHOT 계열 직렬 제어와 `OSMS20-35`/`SGSP20-85` 기준 명령 브리지
+- `src/p_sensor/motion/shot102_cli.py`
+  `SHOT-702`/`SHOT-102` 실장비 status, jog, origin 점검용 CLI
 - `src/p_sensor/ui/main_window.py`
   메인 GUI, 수동 측정, 자동화 패널, 로그, 설정 적용
 
@@ -194,42 +208,45 @@
 
 리니어 스테이지를 이용해 변위 단계별로 센서를 누르면서 DAQ에서 저항값을 읽고 매칭하는 자동화 기능을 향후 확장 범위로 둔다. 이때 중요한 원칙은 자동화 기능이 기존 DAQ 측정 루프를 흡수하지 않고, 재사용 가능한 공용 측정 엔진 위에 상위 오케스트레이션 계층으로 올라가야 한다는 점이다.
 
-우선 방향은 다음과 같다.
+현재 방향은 다음과 같다.
 
 1. `acquisition` 계층은 단일 DAQ 측정 루프로 유지하고 다른 프로젝트에서도 재사용 가능하게 둔다.
 2. 리니어 스테이지 제어는 별도 `motion` 계층으로 분리한다.
 3. 변위 step 실행, 안정화 대기, 측정 집계, 결과 저장은 `automation` 계층에서 담당한다.
 4. UI는 수동 측정 패널과 자동화 패널을 조합하는 구조로 점진 분리한다.
 5. 세션 식별자, 세션별 폴더, 측정 창별 CSV 저장 구조를 자동화 기본 정책으로 둔다.
-6. 장비 어댑터는 `SHOT-102`를 기준으로 구현하되, 상위 오케스트레이션은 장비 독립 인터페이스를 유지한다.
+6. 장비 어댑터는 SHOT 계열을 기준으로 구현하되, 상위 오케스트레이션은 장비 독립 인터페이스를 유지한다.
+7. 검증된 SHOT 계열 모션 모듈은 오케스트레이션에서 직접 직렬 명령을 노출하지 않고 명령 브리지 뒤에 둔다.
+8. 다음 개발 단계는 `move -> ready wait -> settle -> measurement window -> result save -> disengage/origin` 순서를 안전하게 실행하는 오케스트레이션 계층 정리다.
 
 자세한 계획은 `docs/linear_stage_automation_plan_ko.md`를 기준 문서로 사용한다.
 
 현재 자동화 하드웨어 전제는 다음과 같다.
 
-- 스테이지는 `SIGMAKOKI SGSP20-85`
-- 컨트롤러는 `SIGMAKOKI SHOT-102`
+- 스테이지는 `OPTOSIGMA OSMS20-35`
+- 컨트롤러는 `OPTOSIGMA SHOT-702`
 - 호스트 제어는 `RS-232C` 기반
-- 자동화 코드는 `SHOT-102 mode`의 명령 체계를 기준으로 구현
+- 자동화 코드는 SHOT 계열 호스트 제어 명령 체계를 기준으로 구현
 
 ## 11. 남은 과제
 
 우선순위가 높은 후속 작업은 다음과 같다.
 
-1. 채널 상세 파라미터 편집 UI 추가
-2. NI 장비와 슬롯 정보를 화면에 표시하는 연결 진단 UI 추가
-3. GUI 수동 검증 절차를 문서화하고 반복 가능한 체크리스트로 정리
-4. CSV 저장과 설정 직렬화에 대한 자동 테스트 확대
-5. 16채널 구성에서의 레이아웃 및 성능 검증
-6. `main_window.py`에 집중된 자동화 UI를 패널 단위 모듈로 분리
-7. 자동화 안전 계층(`soft limit`, `timeout`, `interlock`) 보강
-8. `SIGMAKOKI SHOT-102` 실장비 기준 수동 검증 절차와 교정값 관리 문서화
+1. 사용자 확인형 인터락과 오류 복구 절차 표준화
+2. `move -> settle -> measure -> disengage/origin` 실행 흐름의 수동 하드웨어 체크리스트 문서화
+3. 실제 NI DAQ backend와 `Shot102CommandBridge`를 조합한 전체 자동화 흐름 검증
+4. `main_window.py`에 집중된 자동화 UI를 패널 단위 모듈로 분리
+5. CSV 저장과 설정 직렬화에 대한 자동 테스트 확대
+6. NI 장비와 슬롯 정보를 화면에 표시하는 연결 진단 UI 추가
+7. 채널 상세 파라미터 편집 UI 추가
+8. 16채널 구성에서의 레이아웃 및 성능 검증
 
 ## 12. 실행 및 검증 명령
 
 ```powershell
 .\scripts\setup_env.ps1
 .\scripts\run_app.ps1
+.\scripts\run_automation_smoke.ps1 --session-label shot702_smoke_real
 .\.venv\Scripts\python.exe -m pytest
 ```
 

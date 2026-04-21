@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QSpinBox,
     QTableWidget,
@@ -37,7 +38,9 @@ from p_sensor import __version__
 from p_sensor.acquisition import AcquisitionController, NiDaqBackend, SimulatedBackend
 from p_sensor.automation import (
     AutomationCancelledError,
+    AutomationSafetyPolicy,
     AutomationSessionOptions,
+    save_recipe,
     ExperimentRunner,
     NoOpCommandBridge,
     load_recipe,
@@ -66,17 +69,29 @@ from p_sensor.models import (
 from p_sensor.profiles import AppProfile, IO_APP_PROFILE
 from p_sensor.services import MeasurementService
 from p_sensor.storage import CsvRecorder, prepare_session_paths
+from p_sensor.ui.recipe_helper_dialog import RecipeHelperDialog
 
 
 class MainWindow(QMainWindow):
     SETTINGS_GROUP = "main_window"
     RANGE_OPTIONS = {"10 s": 10.0, "60 s": 60.0, "180 s": 180.0, "All": None}
+    TONE_STYLES = {
+        "neutral": "background: #161B22; border: 1px solid #30363D; color: #E6EDF3;",
+        "running": "background: #0F2D2A; border: 1px solid #2EA043; color: #D2F4DF;",
+        "warning": "background: #35270F; border: 1px solid #D29922; color: #F8E3B1;",
+        "error": "background: #3A1F24; border: 1px solid #F85149; color: #FFD8D4;",
+        "info": "background: #152238; border: 1px solid #2F81F7; color: #D8E9FF;",
+        "muted": "background: #11151B; border: 1px solid #30363D; color: #9BA7B4;",
+    }
 
     def __init__(self, config: AppConfig, config_path: Path, profile: AppProfile = IO_APP_PROFILE) -> None:
         super().__init__()
         self.profile = profile
         self.setWindowTitle(profile.window_title)
-        self.resize(1560, 960)
+        if profile.supports_analog_output:
+            self.resize(1660, 980)
+        else:
+            self.resize(1520, 940)
 
         self.config = self._config_for_profile(config)
         self.config_path = config_path
@@ -132,6 +147,7 @@ class MainWindow(QMainWindow):
         self.ao_setpoint_spins: list[QDoubleSpinBox] = []
         self.ao_live_items: list[QTableWidgetItem] = []
 
+        self._apply_visual_style()
         self._build_menu()
         self._build_ui()
         self._init_compatibility_widgets()
@@ -193,14 +209,94 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self._build_status_bar())
 
         self.workspace_splitter = QSplitter(Qt.Horizontal)
+        self.workspace_splitter.setChildrenCollapsible(False)
         self.workspace_splitter.addWidget(self._build_left_panel())
         self.workspace_splitter.addWidget(self._build_right_panel())
         self.workspace_splitter.setStretchFactor(0, 4)
         self.workspace_splitter.setStretchFactor(1, 1)
-        self.workspace_splitter.setSizes([1180, 380])
+        self.workspace_splitter.setSizes(self._default_splitter_sizes())
         self.workspace_splitter.splitterMoved.connect(self._save_window_preferences)
         central_layout.addWidget(self.workspace_splitter, 1)
         self.setCentralWidget(central)
+
+    def _apply_visual_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QMainWindow {
+                background: #0D1117;
+            }
+            QGroupBox {
+                background: #0F141B;
+                border: 1px solid #30363D;
+                border-radius: 10px;
+                margin-top: 12px;
+                font-weight: 700;
+                color: #E6EDF3;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+                color: #F0F6FC;
+            }
+            QLabel {
+                color: #D0D7DE;
+            }
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTableWidget {
+                background: #11161D;
+                color: #E6EDF3;
+                border: 1px solid #30363D;
+                border-radius: 8px;
+                selection-background-color: #1F6FEB;
+                selection-color: #FFFFFF;
+            }
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+                min-height: 34px;
+                padding: 4px 8px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+            QPushButton {
+                background: #1A2330;
+                color: #E6EDF3;
+                border: 1px solid #314158;
+                border-radius: 8px;
+                min-height: 34px;
+                padding: 6px 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #223049;
+            }
+            QPushButton:disabled {
+                background: #14181E;
+                color: #6E7681;
+                border: 1px solid #2A2F36;
+            }
+            QHeaderView::section {
+                background: #161B22;
+                color: #C9D1D9;
+                border: none;
+                border-right: 1px solid #30363D;
+                border-bottom: 1px solid #30363D;
+                padding: 8px 10px;
+                font-weight: 700;
+            }
+            QTableWidget {
+                gridline-color: #26303A;
+                alternate-background-color: #0F141B;
+            }
+            QTableWidget::item {
+                padding: 6px;
+            }
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            """
+        )
 
     def _init_compatibility_widgets(self) -> None:
         self.resistance_plot_checkbox = QCheckBox()
@@ -221,7 +317,9 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
         self.session_state_label = QLabel("Disconnected")
         self.backend_state_label = QLabel("Backend simulation")
-        self.channel_summary_label = QLabel("AI 0 / AO 0" if self._supports_analog_output() else "AI 0")
+        self.channel_summary_label = QLabel(
+            "AI 0 / AO 0" if self._supports_analog_output() else f"{self._input_summary_prefix()} 0"
+        )
         self.export_state_label = QLabel(DEFAULT_EXPORT_DIRECTORY)
         version_label = QLabel(f"v{__version__}")
         for widget in (
@@ -231,9 +329,7 @@ class MainWindow(QMainWindow):
             self.export_state_label,
             version_label,
         ):
-            widget.setStyleSheet(
-                "padding: 4px 8px; border: 1px solid #30363D; border-radius: 6px; background: #161B22;"
-            )
+            self._set_badge_style(widget, tone="neutral")
         layout.addWidget(self.session_state_label)
         layout.addWidget(self.backend_state_label)
         layout.addWidget(self.channel_summary_label)
@@ -253,6 +349,7 @@ class MainWindow(QMainWindow):
 
     def _build_right_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setMinimumWidth(440 if self._supports_analog_output() else 390)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -262,7 +359,13 @@ class MainWindow(QMainWindow):
         self.ao_group = self._build_ao_group()
         self.ao_group.setVisible(self._supports_analog_output())
         layout.addWidget(self.ao_group, 1)
-        return panel
+        layout.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(panel)
+        return scroll
 
     def _build_session_group(self) -> QWidget:
         group = QGroupBox("Session")
@@ -348,9 +451,7 @@ class MainWindow(QMainWindow):
 
         mark_row = QHBoxLayout()
         self.mark_state_label = QLabel("Marks 0")
-        self.mark_state_label.setStyleSheet(
-            "padding: 4px 8px; border: 1px solid #30363D; border-radius: 6px; background: #161B22;"
-        )
+        self._set_badge_style(self.mark_state_label, tone="muted")
         self.mark_start_button = QPushButton("Mark Start")
         self.mark_stop_button = QPushButton("Mark Stop")
         self.mark_start_button.clicked.connect(self._start_highlight_interval)
@@ -378,9 +479,11 @@ class MainWindow(QMainWindow):
         load_recipe_button = QPushButton("Load Recipe")
         load_recipe_button.clicked.connect(self._load_automation_recipe_dialog)
         self.load_recipe_button = load_recipe_button
+        self.recipe_helper_button = QPushButton("Recipe Helper")
+        self.recipe_helper_button.clicked.connect(self._open_recipe_helper_dialog)
         self.motion_config_path_edit = QLineEdit()
         self.motion_config_path_edit.setReadOnly(True)
-        self.motion_config_path_edit.setPlaceholderText("Optional SHOT-102 motion config JSON")
+        self.motion_config_path_edit.setPlaceholderText("Optional SHOT motion config JSON")
         load_motion_button = QPushButton("Load Motion")
         load_motion_button.clicked.connect(self._load_motion_config_dialog)
         self.load_motion_button = load_motion_button
@@ -388,25 +491,24 @@ class MainWindow(QMainWindow):
         self.automation_status_label = QLabel("Idle")
         self.automation_step_label = QLabel("No recipe loaded")
         self.motion_status_label = QLabel("Motion bridge: disabled")
-        for widget in (self.automation_status_label, self.automation_step_label):
-            widget.setStyleSheet(
-                "padding: 4px 8px; border: 1px solid #30363D; border-radius: 6px; background: #161B22;"
-            )
-        self.motion_status_label.setStyleSheet(
-            "padding: 4px 8px; border: 1px solid #30363D; border-radius: 6px; background: #161B22;"
-        )
+        self.automation_step_label.setWordWrap(True)
+        self.motion_status_label.setWordWrap(True)
+        self._set_badge_style(self.automation_status_label, tone="muted")
+        self._set_badge_style(self.automation_step_label, tone="neutral")
+        self._set_badge_style(self.motion_status_label, tone="muted")
 
         grid.addWidget(QLabel("Recipe"), 0, 0, 1, 2)
         grid.addWidget(self.recipe_path_edit, 1, 0)
         grid.addWidget(load_recipe_button, 1, 1)
-        grid.addWidget(QLabel("Motion Config"), 2, 0, 1, 2)
-        grid.addWidget(self.motion_config_path_edit, 3, 0)
-        grid.addWidget(load_motion_button, 3, 1)
-        grid.addWidget(QLabel("Status"), 4, 0)
-        grid.addWidget(QLabel("Current Step"), 4, 1)
-        grid.addWidget(self.automation_status_label, 5, 0)
-        grid.addWidget(self.automation_step_label, 5, 1)
-        grid.addWidget(self.motion_status_label, 6, 0, 1, 2)
+        grid.addWidget(self.recipe_helper_button, 2, 0, 1, 2)
+        grid.addWidget(QLabel("Motion Config"), 3, 0, 1, 2)
+        grid.addWidget(self.motion_config_path_edit, 4, 0)
+        grid.addWidget(load_motion_button, 4, 1)
+        grid.addWidget(QLabel("Status"), 5, 0)
+        grid.addWidget(QLabel("Current Step"), 5, 1)
+        grid.addWidget(self.automation_status_label, 6, 0)
+        grid.addWidget(self.automation_step_label, 6, 1)
+        grid.addWidget(self.motion_status_label, 7, 0, 1, 2)
 
         button_row = QHBoxLayout()
         self.run_automation_button = QPushButton("Run Automation")
@@ -425,7 +527,8 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(group)
         layout.setSpacing(8)
 
-        ai_group = QGroupBox("AI Live")
+        ai_group = QGroupBox(self._input_live_group_title())
+        ai_group.setMinimumHeight(170)
         ai_layout = QGridLayout(ai_group)
         ai_layout.setHorizontalSpacing(8)
         ai_layout.setVerticalSpacing(8)
@@ -433,6 +536,7 @@ class MainWindow(QMainWindow):
         self.ai_cards_layout = ai_layout
 
         ao_group = QGroupBox("AO Live")
+        ao_group.setMinimumHeight(170)
         ao_layout = QGridLayout(ao_group)
         ao_layout.setHorizontalSpacing(8)
         ao_layout.setVerticalSpacing(8)
@@ -445,7 +549,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_plot_group(self) -> QWidget:
-        group = QGroupBox("Input Trend")
+        group = QGroupBox(self._input_plot_group_title())
         layout = QVBoxLayout(group)
         top_row = QHBoxLayout()
         top_row.addWidget(QLabel("Range"))
@@ -453,7 +557,7 @@ class MainWindow(QMainWindow):
         self.range_combo.addItems(list(self.RANGE_OPTIONS.keys()))
         self.range_combo.currentTextChanged.connect(self._refresh_plot)
         top_row.addWidget(self.range_combo)
-        top_row.addWidget(QLabel("AI View"))
+        top_row.addWidget(QLabel(self._input_view_selector_label()))
         self.ai_plot_mode_combo = QComboBox()
         self.ai_plot_mode_combo.addItems(["Scaled", "Raw Voltage"])
         self.ai_plot_mode_combo.currentTextChanged.connect(self._refresh_plot)
@@ -487,11 +591,12 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
+        self.log_output.setMinimumHeight(150)
         layout.addWidget(self.log_output)
         return group
 
     def _build_ai_group(self) -> QWidget:
-        group = QGroupBox("AI Channels")
+        group = QGroupBox(self._input_channel_group_title())
         layout = QVBoxLayout(group)
         self.ai_table = QTableWidget()
         self.ai_table.setColumnCount(10)
@@ -500,10 +605,13 @@ class MainWindow(QMainWindow):
         )
         self.ai_table.verticalHeader().setVisible(False)
         self.ai_table.setAlternatingRowColors(True)
+        self.ai_table.setWordWrap(False)
+        self.ai_table.verticalHeader().setDefaultSectionSize(34)
         self.ai_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.ai_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.ai_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.ai_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
+        self.ai_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.ai_table)
         return group
 
@@ -517,9 +625,12 @@ class MainWindow(QMainWindow):
         )
         self.ao_table.verticalHeader().setVisible(False)
         self.ao_table.setAlternatingRowColors(True)
+        self.ao_table.setWordWrap(False)
+        self.ao_table.verticalHeader().setDefaultSectionSize(34)
         self.ao_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.ao_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.ao_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.ao_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.ao_table)
         return group
 
@@ -557,7 +668,10 @@ class MainWindow(QMainWindow):
                 accent=self.ai_color_by_row[row] if row < len(self.ai_color_by_row) else "#3A7CA5",
                 subtitle=self.ai_physical_items[row].text(),
             )
-            self.ai_cards_layout.addWidget(frame, row // 2, row % 2)
+            if self._supports_analog_output():
+                self.ai_cards_layout.addWidget(frame, row // 2, row % 2)
+            else:
+                self.ai_cards_layout.addWidget(frame, row, 0)
             self.ai_card_widgets[row] = (value_label, detail_label, status_label)
 
         for row, name_item in enumerate(self.ao_name_items):
@@ -580,6 +694,7 @@ class MainWindow(QMainWindow):
         frame.setStyleSheet(
             "QFrame { background: #161B22; border: 1px solid #30363D; border-radius: 8px; }"
         )
+        frame.setMinimumHeight(118)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(4)
@@ -588,12 +703,15 @@ class MainWindow(QMainWindow):
         title_label.setStyleSheet(f"font-weight: 700; color: {accent};")
         subtitle_label = QLabel(subtitle)
         subtitle_label.setStyleSheet("color: #8B949E;")
+        subtitle_label.setWordWrap(True)
         value_label = QLabel("--")
         value_label.setStyleSheet("font-size: 22px; font-weight: 800; color: #F0F6FC;")
         detail_label = QLabel("--")
         detail_label.setStyleSheet("color: #C9D1D9;")
+        detail_label.setWordWrap(True)
         status_label = QLabel("--")
         status_label.setStyleSheet("color: #8B949E;")
+        status_label.setWordWrap(True)
 
         layout.addWidget(title_label)
         layout.addWidget(subtitle_label)
@@ -860,12 +978,15 @@ class MainWindow(QMainWindow):
     def _refresh_runtime_summary(self) -> None:
         active_ai = len([checkbox for checkbox in self.ai_enabled_checks if checkbox.isChecked()])
         self.backend_state_label.setText(f"Backend {self.backend_combo.currentText()}")
+        self._set_badge_style(self.backend_state_label, tone="info")
         if self._supports_analog_output():
             active_ao = len([checkbox for checkbox in self.ao_enabled_checks if checkbox.isChecked()])
             self.channel_summary_label.setText(f"AI {active_ai} / AO {active_ao}")
         else:
-            self.channel_summary_label.setText(f"AI {active_ai}")
+            self.channel_summary_label.setText(f"{self._input_summary_prefix()} {active_ai}")
+        self._set_badge_style(self.channel_summary_label, tone="neutral")
         self.export_state_label.setText(self.export_path_edit.text() or DEFAULT_EXPORT_DIRECTORY)
+        self._set_badge_style(self.export_state_label, tone="muted")
         for row in range(min(self.channel_table.rowCount(), len(self.ai_enabled_checks))):
             button = self.channel_table.cellWidget(row, 1)
             if isinstance(button, QPushButton):
@@ -879,17 +1000,24 @@ class MainWindow(QMainWindow):
         automation_stopping = automation_running and self.automation_stop_event.is_set()
         if automation_stopping:
             state_text = "Automation Stopping"
+            tone = "warning"
         elif automation_running:
             state_text = "Automation Running"
+            tone = "running"
         elif running and paused:
             state_text = "Paused"
+            tone = "warning"
         elif running:
             state_text = "Running"
+            tone = "running"
         elif connected:
             state_text = "Connected"
+            tone = "info"
         else:
             state_text = "Disconnected"
+            tone = "muted"
         self.session_state_label.setText(state_text)
+        self._set_badge_style(self.session_state_label, tone=tone)
         manual_controls_enabled = not automation_running
         self.connect_button.setEnabled(manual_controls_enabled and not running)
         self.start_button.setEnabled(manual_controls_enabled and connected and not running)
@@ -902,6 +1030,7 @@ class MainWindow(QMainWindow):
         self.mark_start_button.setEnabled(manual_controls_enabled and running and not paused and self.active_highlight_start_s is None)
         self.mark_stop_button.setEnabled(manual_controls_enabled and running and self.active_highlight_start_s is not None)
         self.load_recipe_button.setEnabled(not automation_running)
+        self.recipe_helper_button.setEnabled(not automation_running)
         self.load_motion_button.setEnabled(not automation_running)
         self.run_automation_button.setEnabled(
             not automation_running and self.automation_recipe is not None and not running
@@ -909,8 +1038,10 @@ class MainWindow(QMainWindow):
         self.stop_automation_button.setEnabled(automation_running)
         if self.active_highlight_start_s is None:
             self.mark_state_label.setText(f"Marks {len(self.highlight_intervals)}")
+            self._set_badge_style(self.mark_state_label, tone="muted")
         else:
             self.mark_state_label.setText(f"Marking {self.active_highlight_start_s:.3f}s")
+            self._set_badge_style(self.mark_state_label, tone="warning")
 
     def _is_automation_running(self) -> bool:
         return self.automation_thread is not None and self.automation_thread.is_alive()
@@ -1348,10 +1479,46 @@ class MainWindow(QMainWindow):
             self.recipe_path_edit.setText(str(recipe_path))
             self.automation_status_label.setText("Ready")
             self.automation_step_label.setText(f"{recipe.recipe_id} ({len(recipe.steps)} steps)")
+            self._set_badge_style(self.automation_status_label, tone="info")
             self._update_runtime_controls()
             self._log(f"Automation recipe loaded: {recipe_path}")
         except Exception as exc:
             self._show_error("Recipe Load Failed", str(exc))
+
+    def _open_recipe_helper_dialog(self) -> None:
+        if self._is_automation_running():
+            self._show_error("Automation Running", "Stop automation before creating another recipe.")
+            return
+        dialog = RecipeHelperDialog(self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        try:
+            helper_result = dialog.build_result()
+            default_dir = resolve_runtime_path(Path("dev_local") / "config")
+            default_dir.mkdir(parents=True, exist_ok=True)
+            default_path = default_dir / helper_result.suggested_file_name
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Automation Recipe",
+                str(default_path),
+                "JSON Files (*.json);;All Files (*)",
+            )
+            if not file_path:
+                return
+            recipe_path = resolve_runtime_path(file_path)
+            save_recipe(recipe_path, helper_result.recipe)
+            self.automation_recipe_path = recipe_path
+            self.automation_recipe = helper_result.recipe
+            self.recipe_path_edit.setText(str(recipe_path))
+            self.automation_status_label.setText("Ready")
+            self.automation_step_label.setText(
+                f"{helper_result.recipe.recipe_id} ({len(helper_result.recipe.steps)} steps)"
+            )
+            self._set_badge_style(self.automation_status_label, tone="info")
+            self._update_runtime_controls()
+            self._log(f"Recipe created: {recipe_path}")
+        except Exception as exc:
+            self._show_error("Recipe Helper Failed", str(exc))
 
     def _load_motion_config_dialog(self) -> None:
         if self._is_automation_running():
@@ -1374,6 +1541,7 @@ class MainWindow(QMainWindow):
             self.motion_status_label.setText(
                 f"{motion_config.controller_model} {motion_config.port} axis {motion_config.axis}"
             )
+            self._set_badge_style(self.motion_status_label, tone="info")
             self._update_runtime_controls()
             self._log(f"Motion config loaded: {motion_path}")
         except Exception as exc:
@@ -1413,6 +1581,7 @@ class MainWindow(QMainWindow):
             command_bridge=command_bridge,
             event_callback=self._queue_automation_event,
             stop_event=self.automation_stop_event,
+            safety_policy=self._make_automation_safety_policy(),
         )
 
         def run_automation() -> None:
@@ -1428,6 +1597,7 @@ class MainWindow(QMainWindow):
         self.automation_thread = threading.Thread(target=run_automation, daemon=True)
         self.automation_status_label.setText("Running")
         self.automation_step_label.setText("Initializing")
+        self._set_badge_style(self.automation_status_label, tone="running")
         self.automation_thread.start()
         self.automation_timer.start(100)
         self._update_runtime_controls()
@@ -1436,12 +1606,25 @@ class MainWindow(QMainWindow):
     def _make_automation_command_bridge(self):
         if self.motion_config is None:
             self.motion_status_label.setText("Motion bridge: disabled")
+            self._set_badge_style(self.motion_status_label, tone="muted")
             return NoOpCommandBridge()
         controller = Shot102Controller(self.motion_config)
         self.motion_status_label.setText(
             f"{self.motion_config.controller_model} {self.motion_config.port} axis {self.motion_config.axis}"
         )
+        self._set_badge_style(self.motion_status_label, tone="info")
         return Shot102CommandBridge(controller)
+
+    def _make_automation_safety_policy(self) -> AutomationSafetyPolicy:
+        if self.motion_config is None:
+            return AutomationSafetyPolicy()
+        if not self.motion_config.enforce_software_limits:
+            return AutomationSafetyPolicy(require_target_displacement=True)
+        return AutomationSafetyPolicy(
+            min_position_mm=self.motion_config.min_position_mm,
+            max_position_mm=self.motion_config.max_position_mm,
+            require_target_displacement=True,
+        )
 
     def _request_stop_automation(self, *_args, wait: bool = False) -> None:
         if not self._is_automation_running():
@@ -1449,6 +1632,7 @@ class MainWindow(QMainWindow):
         if not self.automation_stop_event.is_set():
             self.automation_stop_event.set()
             self.automation_status_label.setText("Stopping")
+            self._set_badge_style(self.automation_status_label, tone="warning")
             self._log("Automation stop requested")
             self._update_runtime_controls()
         if wait and self.automation_thread is not None:
@@ -1469,16 +1653,19 @@ class MainWindow(QMainWindow):
             elif kind == "completed":
                 self.automation_last_result = payload
                 self.automation_status_label.setText("Completed")
+                self._set_badge_style(self.automation_status_label, tone="info")
                 self.automation_step_label.setText(
                     f"{len(payload.step_results)} steps -> {payload.session_dir.name}"
                 )
                 self._log(f"Automation completed: {payload.session_dir}")
             elif kind == "cancelled":
                 self.automation_status_label.setText("Cancelled")
+                self._set_badge_style(self.automation_status_label, tone="warning")
                 self.automation_step_label.setText("Stopped by user")
                 self._log(str(payload))
             elif kind == "failed":
                 self.automation_status_label.setText("Failed")
+                self._set_badge_style(self.automation_status_label, tone="error")
                 self.automation_step_label.setText("Execution error")
                 self._show_error("Automation Failed", str(payload))
 
@@ -1490,15 +1677,18 @@ class MainWindow(QMainWindow):
     def _handle_automation_event(self, event_name: str, payload: dict) -> None:
         if event_name == "session_started":
             self.automation_status_label.setText("Running")
+            self._set_badge_style(self.automation_status_label, tone="running")
             self.automation_step_label.setText(payload["session_id"])
             self._log(f"Automation session created: {payload['session_dir']}")
             return
         if event_name == "motion_connected":
             self.motion_status_label.setText(payload["message"])
+            self._set_badge_style(self.motion_status_label, tone="info")
             self._log(payload["message"])
             return
         if event_name == "step_started":
             self.automation_status_label.setText("Running")
+            self._set_badge_style(self.automation_status_label, tone="running")
             self.automation_step_label.setText(f"Step {payload['step_index']}: {payload['step_id']}")
             self._log(
                 f"Automation step started: {payload['step_id']} target={payload['target_displacement']}"
@@ -1571,6 +1761,28 @@ class MainWindow(QMainWindow):
             elif child_layout is not None:
                 self._clear_layout(child_layout)
 
+    def _default_splitter_sizes(self) -> list[int]:
+        return [1200, 440] if self._supports_analog_output() else [1240, 360]
+
+    def _set_badge_style(self, widget: QLabel, *, tone: str) -> None:
+        style = self.TONE_STYLES.get(tone, self.TONE_STYLES["neutral"])
+        widget.setStyleSheet(f"padding: 5px 9px; border-radius: 8px; font-weight: 600; {style}")
+
+    def _input_summary_prefix(self) -> str:
+        return "Sensors" if self.profile.profile_id == "automation_console" else "AI"
+
+    def _input_live_group_title(self) -> str:
+        return "Sensor Live" if self.profile.profile_id == "automation_console" else "AI Live"
+
+    def _input_channel_group_title(self) -> str:
+        return "Sensor Channels" if self.profile.profile_id == "automation_console" else "AI Channels"
+
+    def _input_plot_group_title(self) -> str:
+        return "Sensor Trend" if self.profile.profile_id == "automation_console" else "Input Trend"
+
+    def _input_view_selector_label(self) -> str:
+        return "Sensor View" if self.profile.profile_id == "automation_console" else "AI View"
+
     def _restore_window_preferences(self) -> None:
         self.settings.beginGroup(self.SETTINGS_GROUP)
         geometry = self.settings.value("geometry")
@@ -1591,6 +1803,8 @@ class MainWindow(QMainWindow):
             restored_sizes = [int(size) for size in splitter_sizes]
             if len(restored_sizes) == self.workspace_splitter.count():
                 self.workspace_splitter.setSizes(restored_sizes)
+        else:
+            self.workspace_splitter.setSizes(self._default_splitter_sizes())
         if maximized is not None and str(maximized).lower() == "true":
             self.showMaximized()
 

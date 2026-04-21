@@ -6,6 +6,7 @@ from threading import Event
 from typing import Protocol
 
 from p_sensor.automation.models import AutomationRecipe, AutomationSessionOptions, AutomationSessionResult, AutomationStep
+from p_sensor.automation.safety import AutomationSafetyPolicy
 from p_sensor.automation.storage import AutomationSessionStore
 from p_sensor.services import MeasurementService, MeasurementWindowCancelledError
 
@@ -19,6 +20,8 @@ class CommandBridge(Protocol):
 
     def abort(self) -> None: ...
 
+    def get_position_mm(self) -> float | None: ...
+
 
 class NoOpCommandBridge:
     def engage(self, step: AutomationStep) -> None:
@@ -31,6 +34,9 @@ class NoOpCommandBridge:
         return None
 
     def abort(self) -> None:
+        return None
+
+    def get_position_mm(self) -> float | None:
         return None
 
 
@@ -47,18 +53,21 @@ class ExperimentRunner:
         sleep_fn=time.sleep,
         event_callback=None,
         stop_event: Event | None = None,
+        safety_policy: AutomationSafetyPolicy | None = None,
     ) -> None:
         self.measurement_service = measurement_service
         self.command_bridge = command_bridge or NoOpCommandBridge()
         self.sleep_fn = sleep_fn
         self.event_callback = event_callback
         self.stop_event = stop_event
+        self.safety_policy = safety_policy or AutomationSafetyPolicy()
 
     def run(
         self,
         recipe: AutomationRecipe,
         options: AutomationSessionOptions,
     ) -> AutomationSessionResult:
+        self.safety_policy.validate_recipe(recipe)
         started_at = self._now()
         store = AutomationSessionStore(
             options=options,
@@ -101,8 +110,18 @@ class ExperimentRunner:
             step_id=step.step_id,
             target_displacement=step.target_displacement,
         )
+        position_before_mm = self._get_motion_position_mm()
+        self.safety_policy.validate_position_mm(
+            position_before_mm,
+            label=f"position before step {step.step_id!r}",
+        )
         self.command_bridge.engage(step)
         self.command_bridge.wait_until_ready(step.ready_timeout_s)
+        position_after_engage_mm = self._get_motion_position_mm()
+        self.safety_policy.validate_position_mm(
+            position_after_engage_mm,
+            label=f"position after engage for step {step.step_id!r}",
+        )
         self._ensure_not_cancelled()
         if step.settle_time_s > 0:
             self.sleep_fn(step.settle_time_s)
@@ -120,11 +139,23 @@ class ExperimentRunner:
             step_index=step_index,
             window_result=window_result,
         )
+        position_after_disengage_mm = None
+        if step.disengage_after_measure:
+            self.command_bridge.disengage(step)
+            self.command_bridge.wait_until_ready(step.ready_timeout_s)
+            position_after_disengage_mm = self._get_motion_position_mm()
+            self.safety_policy.validate_position_mm(
+                position_after_disengage_mm,
+                label=f"position after disengage for step {step.step_id!r}",
+            )
         result = store.append_step_result(
             step_index=step_index,
             step=step,
             measurement_path=measurement_path,
             window_result=window_result,
+            position_before_mm=position_before_mm,
+            position_after_engage_mm=position_after_engage_mm,
+            position_after_disengage_mm=position_after_disengage_mm,
         )
         self._emit(
             "step_completed",
@@ -134,9 +165,6 @@ class ExperimentRunner:
             frame_count=result.frame_count,
         )
 
-        if step.disengage_after_measure:
-            self.command_bridge.disengage(step)
-            self.command_bridge.wait_until_ready(step.ready_timeout_s)
         self._ensure_not_cancelled()
         if step.post_disengage_wait_s > 0:
             self.sleep_fn(step.post_disengage_wait_s)
@@ -167,3 +195,9 @@ class ExperimentRunner:
         disconnect = getattr(self.command_bridge, "disconnect", None)
         if callable(disconnect):
             disconnect()
+
+    def _get_motion_position_mm(self) -> float | None:
+        get_position = getattr(self.command_bridge, "get_position_mm", None)
+        if not callable(get_position):
+            return None
+        return get_position()

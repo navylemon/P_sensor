@@ -79,15 +79,23 @@
 
 현재 자동화 개발 기준 하드웨어는 다음과 같다.
 
-- 리니어 스테이지: `SIGMAKOKI SGSP20-85`
-- 스테이지 컨트롤러: `SIGMAKOKI SHOT-102`
+- 리니어 스테이지: `OPTOSIGMA OSMS20-35`
+- 스테이지 컨트롤러: `OPTOSIGMA SHOT-702`
+- 검증된 연결 포트: 로컬 기준 `COM10`
+- 확인된 컨트롤러 ROM: `V1.10`
 
 위 조합을 기준으로 할 때 다음 원칙을 적용한다.
 
-- 호스트 제어는 `SHOT-102`의 `RS-232C` 인터페이스를 기준으로 구현한다.
-- 호스트 제어 명령은 `SHOT-102 mode`를 기준으로 사용한다.
-- `SGSP20-85`는 별도 원점 센서가 없으므로 홈 동작은 제한 센서를 활용하는 컨트롤러 방식에 의존한다.
+- 호스트 제어는 `SHOT-702`의 `RS-232C` 인터페이스를 기준으로 구현한다.
+- 호스트 제어 명령은 SHOT 계열의 호스트 제어 명령을 기준으로 사용한다.
+- `OSMS20-35`는 limit sensor normal close, origin sensor normal open 전제를 기준으로 한다.
 - 변위-펄스 환산은 스테이지 해상도와 컨트롤러 step 설정에 따라 달라질 수 있으므로 코드에서 설정 가능하게 둔다.
+- SHOT 계열 제어 구현은 `src/p_sensor/motion/shot102.py`에 한정하고, 수동 점검 CLI는 `src/p_sensor/motion/shot102_cli.py`, `scripts/check_shot702_stage.ps1`, `scripts/check_shot102_stage.ps1`로 관리한다.
+- 2026-04-20 기준 수동 검증 완료 범위는 `status`, 상대 이동, 방향키 `jog`, `origin` 복귀다.
+- 2026-04-20 기준 자동화 smoke 검증 완료 범위는 시뮬레이션 DAQ와 실제 `Shot102CommandBridge`를 조합한 `0.5 mm -> 측정 창 -> 0.0 mm` 단일 step 실행이다.
+- 자동화 오케스트레이션은 CLI를 직접 호출하지 않고 `Shot102CommandBridge` 또는 동등한 명령 브리지 인터페이스를 통해서만 모션 계층을 사용한다.
+- 실장비 이동 테스트는 자동 테스트에 포함하지 않는다. 단위 테스트는 명령 문자열, 설정 검증, 소프트 리밋, 브리지 변환만 검증하고 실제 이동은 수동 점검 절차로 분리한다.
+- 공용 샘플 설정은 `config/shot702_osms20_35.example.json`에 두되, 실제 포트, 홈 방향, `pulses_per_mm`, 소프트 리밋은 `dev_local/config/`의 로컬 설정에서 관리한다.
 
 ## 6. 아카이브 및 정리 기준
 
@@ -103,7 +111,7 @@
 - 실제 측정 결과 기본 저장 경로는 `dev_local/exports/`로 유지한다.
 - 테스트 파일은 `dev_local/tests/`에 두고 `pyproject.toml`의 `pytest` 설정과 일치시킨다.
 - 장비별 또는 사용자별 설정은 `dev_local/config/`에 둔다.
-- `config/shot102_sgsp20_85.example.json` 같은 공용 샘플은 Git에 포함하고, 실제 `COM` 포트와 교정값은 `dev_local/config/`에 둔다.
+- `config/shot702_osms20_35.example.json` 같은 공용 샘플은 Git에 포함하고, 실제 `COM` 포트와 교정값은 `dev_local/config/`에 둔다.
 - 하드웨어 점검 로그와 수동 검증 산출물은 `dev_local/hardware_checks/`에 둔다.
 - 프로그램별 실행 스크립트는 `scripts/`에서 관리한다.
 - 자동화 시나리오 샘플과 실험 레시피 예제는 `config/`에 둘 수 있고, 장비별 실제 값은 `dev_local/config/`에 둔다.

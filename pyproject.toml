@@ -28,6 +28,10 @@ dev = [
 p-sensor = "p_sensor.launcher:main"
 p-sensor-io = "p_sensor.launcher:main_io"
 p-sensor-ai = "p_sensor.launcher:main_ai"
+p-sensor-automation = "p_sensor.launcher:main_automation"
+p-sensor-shot102 = "p_sensor.motion.shot102_cli:main"
+p-sensor-shot702 = "p_sensor.motion.shot102_cli:main"
+p-sensor-automation-smoke = "p_sensor.automation.smoke_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

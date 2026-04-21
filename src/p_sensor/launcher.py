@@ -13,7 +13,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--profile",
         default="io",
-        help="Application profile to run. Supported aliases: io, ai.",
+        help="Application profile to run. Supported aliases: io, ai, automation.",
     )
     parser.add_argument(
         "--config",
@@ -36,3 +36,7 @@ def main_io() -> int:
 
 def main_ai() -> int:
     return main(["--profile", "ai"])
+
+
+def main_automation() -> int:
+    return main(["--profile", "automation"])
