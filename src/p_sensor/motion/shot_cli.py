@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import replace
 
-from p_sensor.motion.shot102 import Shot102Controller, Shot102MotionConfig, load_shot102_motion_config
+from p_sensor.motion.shot_series import (
+    MotionError,
+    ShotController,
+    ShotMotionConfig,
+    load_shot_motion_config,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +36,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--origin-direction", choices=("+", "-"), help="Override origin direction for --origin.")
     parser.add_argument("--origin-zero", action="store_true", help="Reset logical zero after --origin completes.")
     parser.add_argument("--zero", action="store_true", help="Set current selected-axis position to logical zero.")
+    parser.add_argument(
+        "--goto-origin",
+        action="store_true",
+        help="Move the selected axis to the logical origin, absolute 0 mm.",
+    )
+    parser.add_argument(
+        "--calibrate-nominal",
+        action="store_true",
+        help=(
+            "Home the selected axis, enter arrow-key jog mode, and press n to set the "
+            "current position as nominal logical zero."
+        ),
+    )
     parser.add_argument("--status", action="store_true", help="Print status. This is the default action.")
     parser.add_argument("--move-relative-mm", type=float, help="Move selected axis by this many mm.")
     parser.add_argument("--move-absolute-mm", type=float, help="Move selected axis to this absolute mm position.")
@@ -37,15 +56,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hold", action="store_true", help="Energize selected-axis motor.")
     parser.add_argument("--free", action="store_true", help="Deenergize selected-axis motor.")
     parser.add_argument("--jog", action="store_true", help="Interactive arrow-key jog mode.")
-    parser.add_argument("--jog-step-mm", type=float, default=0.5, help="Jog distance per arrow key press.")
+    parser.add_argument(
+        "--jog-step-mm",
+        type=float,
+        default=0.1,
+        help="Fine jog distance for left/right arrow keys.",
+    )
+    parser.add_argument(
+        "--jog-large-step-mm",
+        type=float,
+        default=1.0,
+        help="Coarse jog distance for up/down arrow keys.",
+    )
     return parser
 
 
-def config_from_args(args: argparse.Namespace) -> Shot102MotionConfig:
+def config_from_args(args: argparse.Namespace) -> ShotMotionConfig:
     if args.config:
-        config = load_shot102_motion_config(args.config)
+        config = load_shot_motion_config(args.config)
     else:
-        config = Shot102MotionConfig(
+        config = ShotMotionConfig(
             port=args.port or "COM10",
             axis=args.axis or 1,
             baudrate=args.baudrate or 9600,
@@ -81,7 +111,7 @@ def config_from_args(args: argparse.Namespace) -> Shot102MotionConfig:
     return replace(config, **updates)
 
 
-def print_status(controller: Shot102Controller, axis: int) -> None:
+def print_status(controller: ShotController, axis: int) -> None:
     status = controller.get_status()
     position_pulses = status.axis1_position if axis == 1 else status.axis2_position
     position_mm = controller.pulses_to_mm(position_pulses)
@@ -115,23 +145,42 @@ def read_jog_key() -> str:
     return key.lower()
 
 
-def run_jog_mode(controller: Shot102Controller, config: Shot102MotionConfig, *, step_mm: float) -> None:
+def run_jog_mode(
+    controller: ShotController,
+    config: ShotMotionConfig,
+    *,
+    step_mm: float,
+    large_step_mm: float = 1.0,
+    allow_nominal_zero: bool = False,
+    exit_on_nominal: bool = False,
+    key_reader: Callable[[], str] = read_jog_key,
+) -> None:
     if step_mm <= 0:
         raise ValueError("jog_step_mm must be greater than 0.")
+    if large_step_mm <= 0:
+        raise ValueError("jog_large_step_mm must be greater than 0.")
 
     controller.set_motor_hold(axis=config.axis, hold=True)
     print_status(controller, config.axis)
+    nominal_help = ", n=set nominal zero" if allow_nominal_zero else ""
     print(
-        f"jog mode: axis={config.axis}, step={step_mm:g} mm. "
-        "Use Left/Down=-, Right/Up=+, s=status, Space=emergency stop, q=quit."
+        f"jog mode: axis={config.axis}, left/right={step_mm:g} mm, up/down={large_step_mm:g} mm. "
+        f"Use Left=-, Right=+, Down=-, Up=+, s=status, Space=emergency stop{nominal_help}, q=quit."
     )
 
     while True:
-        key = read_jog_key()
+        key = key_reader()
         if key in {"q", "\x03"}:
             break
         if key == "s":
             print_status(controller, config.axis)
+            continue
+        if allow_nominal_zero and key == "n":
+            controller.reset_logical_zero(axis=config.axis)
+            print("nominal logical zero set at current selected-axis position")
+            print_status(controller, config.axis)
+            if exit_on_nominal:
+                break
             continue
         if key == "space":
             controller.emergency_stop()
@@ -142,7 +191,8 @@ def run_jog_mode(controller: Shot102Controller, config: Shot102MotionConfig, *, 
             continue
 
         direction = -1.0 if key in {"left", "down"} else 1.0
-        controller.move_relative_mm(axis=config.axis, delta_mm=direction * step_mm)
+        distance_mm = large_step_mm if key in {"up", "down"} else step_mm
+        controller.move_relative_mm(axis=config.axis, delta_mm=direction * distance_mm)
         controller.wait_until_ready()
         print_status(controller, config.axis)
 
@@ -150,17 +200,19 @@ def run_jog_mode(controller: Shot102Controller, config: Shot102MotionConfig, *, 
 def main() -> int:
     args = build_parser().parse_args()
     config = config_from_args(args)
-    controller = Shot102Controller(config)
+    controller = ShotController(config)
     should_print_status = args.status or not any(
         (
             args.home,
             args.origin,
             args.zero,
+            args.goto_origin,
             args.move_relative_mm is not None,
             args.move_absolute_mm is not None,
             args.hold,
             args.free,
             args.jog,
+            args.calibrate_nominal,
         )
     )
 
@@ -179,8 +231,27 @@ def main() -> int:
                 direction=args.origin_direction,
                 reset_logical_zero=args.origin_zero,
             )
+        if args.calibrate_nominal:
+            try:
+                controller.origin(axis=config.axis, direction=args.origin_direction)
+                print("origin complete")
+                print_status(controller, config.axis)
+            except MotionError as exc:
+                print(f"origin failed: {exc}")
+                print_status(controller, config.axis)
+            run_jog_mode(
+                controller,
+                config,
+                step_mm=args.jog_step_mm,
+                large_step_mm=args.jog_large_step_mm,
+                allow_nominal_zero=True,
+                exit_on_nominal=True,
+            )
         if args.zero:
             controller.reset_logical_zero(axis=config.axis)
+        if args.goto_origin:
+            controller.move_absolute_mm(axis=config.axis, position_mm=0.0)
+            controller.wait_until_ready()
         if args.move_absolute_mm is not None:
             controller.move_absolute_mm(axis=config.axis, position_mm=args.move_absolute_mm)
             if args.wait:
@@ -190,7 +261,12 @@ def main() -> int:
             if args.wait:
                 controller.wait_until_ready()
         if args.jog:
-            run_jog_mode(controller, config, step_mm=args.jog_step_mm)
+            run_jog_mode(
+                controller,
+                config,
+                step_mm=args.jog_step_mm,
+                large_step_mm=args.jog_large_step_mm,
+            )
         if should_print_status or args.wait or args.origin:
             print_status(controller, config.axis)
     finally:

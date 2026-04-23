@@ -1,6 +1,6 @@
-# scripts 폴더 치트시트
+﻿# scripts 폴더 치트시트
 
-최종 갱신: 2026-04-21
+최종 갱신: 2026-04-23
 
 이 문서는 저장소 루트의 `scripts/` 폴더에 있는 PowerShell 스크립트가 각각 무엇을 하는지 빠르게 확인하기 위한 요약이다.
 
@@ -8,7 +8,7 @@
 
 - 모든 명령은 저장소 루트에서 실행하는 것을 기준으로 한다.
 - 대부분의 실행 스크립트는 먼저 `.venv`를 찾는다. 없다면 `.\scripts\setup_env.ps1`를 먼저 실행한다.
-- `check_shot*.ps1`와 `run_automation_smoke.ps1`는 실제 스테이지나 DAQ 하드웨어를 움직이거나 접근할 수 있으므로, 설정 파일과 COM 포트가 맞는지 먼저 확인한다.
+- `run_stage_app.ps1`, `check_stage.ps1`, `run_automation_smoke.ps1`는 실제 스테이지나 DAQ 하드웨어를 움직이거나 접근할 수 있으므로, 설정 파일과 COM 포트가 맞는지 먼저 확인한다.
 
 ## 한눈에 보기
 
@@ -41,6 +41,11 @@
 - 용도: `automation` 프로파일 GUI 실행
 - 실행: `.\scripts\run_automation_app.ps1`
 
+`run_stage_app.ps1`
+
+- 용도: SHOT-702/OSMS20-35 스테이지 전용 터치 친화 GUI 실행
+- 실행: `.\scripts\run_stage_app.ps1`
+
 ### 자동화/장비 점검
 
 `run_automation_smoke.ps1`
@@ -48,15 +53,10 @@
 - 용도: 자동화 레시피 smoke 실행
 - 실행: `.\scripts\run_automation_smoke.ps1 --no-motion`
 
-`check_shot702_stage.ps1`
+`check_stage.ps1`
 
 - 용도: SHOT-702/OSMS20-35 로컬 설정으로 스테이지 수동 점검
-- 실행: `.\scripts\check_shot702_stage.ps1 --status`
-
-`check_shot102_stage.ps1`
-
-- 용도: SHOT-102/SGSP20-85 로컬 설정으로 스테이지 수동 점검
-- 실행: `.\scripts\check_shot102_stage.ps1 --status`
+- 실행: `.\scripts\check_stage.ps1 --status`
 
 ### 패키지 관리
 
@@ -199,6 +199,43 @@
 .\scripts\run_automation_app.ps1
 ```
 
+### `run_stage_app.ps1`
+
+SHOT-702 + OSMS20-35 스테이지 전용 GUI를 실행한다. 앱은 기본적으로 Windows 제목 표시줄과 종료 버튼이 보이는 최대화 창으로 열리며, Stage 1 또는 Stage 1+2 조작 패널을 한 화면에 표시한다.
+
+내부적으로 다음 명령을 실행한다.
+
+```powershell
+.\.venv\Scripts\python.exe -m p_sensor --profile stage --config dev_local\config\stage_shot702_osms20_35.local.json
+```
+
+대표 명령:
+
+```powershell
+.\scripts\run_stage_app.ps1
+```
+
+동일한 직접 실행 명령:
+
+```powershell
+.\.venv\Scripts\python.exe -m p_sensor --profile stage
+.\.venv\Scripts\python.exe -m p_sensor --profile stage --config dev_local\config\stage_shot702_osms20_35.local.json
+p-sensor-stage
+```
+
+주요 기능:
+
+- 확정 장비 `OPTOSIGMA SHOT-702` / `OPTOSIGMA OSMS20-35` 명시
+- Stage 1 또는 Stage 1+2 조작 패널 선택
+- 큰 버튼 기반 `+ 이동`, `- 이동`, `0 mm 이동`, `현재 0설정`, `원점복귀`, `감속 정지`, `비상 정지`
+- `터치스크린 온리` 모드에서 숫자 입력칸 터치 시 가상 키패드 표시
+
+주의:
+
+- 연결 뒤 이동 버튼, 원점복귀, 현재 0설정, 모터 홀드/프리, 속도 적용은 실제 컨트롤러에 명령을 보낸다.
+- 먼저 `상태 새로고침`과 위치 표시를 확인하고, 실제 이동은 작은 이동량부터 확인한다.
+- PowerShell 실행 정책으로 `.ps1` 실행이 막히면 `powershell -ExecutionPolicy Bypass -File .\scripts\run_stage_app.ps1`로 실행할 수 있다.
+
 ## 자동화 smoke
 
 ### `run_automation_smoke.ps1`
@@ -209,7 +246,7 @@
 
 - 앱/DAQ 설정: `config/channel_settings_automation.example.json`
 - 레시피: `config/experiment_recipe_smoke.example.json`
-- 모션 설정 후보: `dev_local/config/shot702_osms20_35.local.json`
+- 모션 설정 후보: `dev_local/config/stage_shot702_osms20_35.local.json`
 
 대표 명령:
 
@@ -240,43 +277,35 @@
 
 ## 스테이지 수동 점검
 
-두 스크립트 모두 내부적으로 같은 Python CLI인 `p_sensor.motion.shot102_cli`를 실행한다. 차이는 기본 설정 파일이다.
+스테이지 점검 스크립트는 내부적으로 Python CLI인 `p_sensor.motion.shot_cli`를 실행한다.
 
-### `check_shot702_stage.ps1`
+### `check_stage.ps1`
 
 SHOT-702 + OSMS20-35 기준 로컬 설정으로 스테이지를 점검한다.
 
 기본 설정:
 
 ```text
-dev_local/config/shot702_osms20_35.local.json
+dev_local/config/stage_shot702_osms20_35.local.json
 ```
 
 대표 명령:
 
 ```powershell
-.\scripts\check_shot702_stage.ps1 --status
-.\scripts\check_shot702_stage.ps1 --jog --jog-step-mm 0.5
-.\scripts\check_shot702_stage.ps1 --hold-on-connect --origin --origin-zero
+.\scripts\check_stage.ps1 --status
+.\scripts\check_stage.ps1 --axis 1 --jog
+.\scripts\check_stage.ps1 --axis 1 --hold --origin --origin-zero
+.\scripts\check_stage.ps1 --axis 1 --hold --goto-origin --status
+.\scripts\check_stage.ps1 --axis 1 --set-speed --calibrate-nominal
 ```
 
-### `check_shot102_stage.ps1`
+확정 운용 기준:
 
-SHOT-102 + SGSP20-85 기준 로컬 설정으로 스테이지를 점검한다.
-
-기본 설정:
-
-```text
-dev_local/config/shot102_sgsp20_85.local.json
-```
-
-대표 명령:
-
-```powershell
-.\scripts\check_shot102_stage.ps1 --status
-.\scripts\check_shot102_stage.ps1 --jog --jog-step-mm 0.5
-.\scripts\check_shot102_stage.ps1 --hold-on-connect --origin --origin-zero
-```
+- 별도 요청이 없으면 SHOT-702의 `axis 1`/driver 1만 움직인다.
+- SHOT-702 기계 원점복귀는 `H:1` 형식으로 수행한다.
+- `--goto-origin`은 logical origin, 즉 `0 mm` 절대 위치로 복귀한다.
+- `--calibrate-nominal`은 origin 시도 후 방향키 jog로 조정하고, `n`을 누르면 현재 위치를 nominal/logical zero로 설정한다.
+- jog 기본값은 좌/우 `0.1 mm`, 위/아래 `1.0 mm`다.
 
 공통 주요 옵션:
 
@@ -303,16 +332,19 @@ dev_local/config/shot102_sgsp20_85.local.json
 | `--origin-direction +` 또는 `--origin-direction -` | `--origin` 방향 override |
 | `--origin-zero` | `--origin` 완료 후 논리 원점 재설정 |
 | `--zero` | 현재 위치를 논리 원점으로 설정 |
+| `--goto-origin` | 선택 축을 logical origin인 `0 mm` 절대 위치로 이동 |
+| `--calibrate-nominal` | origin 시도 후 방향키 jog로 조정하고 `n`으로 nominal/logical zero 설정 |
 | `--move-relative-mm <mm>` | 상대 이동 |
 | `--move-absolute-mm <mm>` | 절대 위치로 이동 |
 | `--wait` | 이동 명령 후 ready까지 대기 |
 | `--jog` | 방향키 jog 모드 |
-| `--jog-step-mm <mm>` | jog 1회 이동 거리. 기본값 `0.5` |
+| `--jog-step-mm <mm>` | 좌/우 방향키 fine jog 거리. 기본값 `0.1` |
+| `--jog-large-step-mm <mm>` | 위/아래 방향키 coarse jog 거리. 기본값 `1.0` |
 
 주의:
 
-- `--move-*`, `--home`, `--origin`, `--jog`는 실제 스테이지를 움직인다.
-- jog 모드는 Windows 콘솔에서 방향키를 읽는다. `q`는 종료, `s`는 상태 출력, Space는 emergency stop이다.
+- `--move-*`, `--home`, `--origin`, `--goto-origin`, `--calibrate-nominal`, `--jog`는 실제 스테이지를 움직인다.
+- jog 모드는 Windows 콘솔에서 방향키를 읽는다. `q`는 종료, `s`는 상태 출력, Space는 emergency stop, 보정 모드의 `n`은 현재 위치 nominal/logical zero 설정이다.
 - `--no-limits`는 안전 제한을 해제하므로 실제 장비에서는 신중히 사용한다.
 
 ## 빌드/아카이브

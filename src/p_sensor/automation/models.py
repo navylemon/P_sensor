@@ -10,6 +10,10 @@ from typing import Any
 class AutomationStep:
     step_id: str
     target_displacement: float | None = None
+    cycle_index: int | None = None
+    phase: str = ""
+    velocity_mm_min: float | None = None
+    measure_enabled: bool = True
     settle_time_s: float = 0.0
     measure_duration_s: float | None = None
     measure_frame_count: int | None = None
@@ -21,9 +25,13 @@ class AutomationStep:
     def __post_init__(self) -> None:
         if not self.step_id.strip():
             raise ValueError("Automation step_id must not be empty.")
+        if self.cycle_index is not None and self.cycle_index <= 0:
+            raise ValueError("cycle_index must be greater than 0 when provided.")
+        if self.velocity_mm_min is not None and self.velocity_mm_min <= 0:
+            raise ValueError("velocity_mm_min must be greater than 0 when provided.")
         if self.settle_time_s < 0:
             raise ValueError("settle_time_s must be 0 or higher.")
-        if self.measure_duration_s is None and self.measure_frame_count is None:
+        if self.measure_enabled and self.measure_duration_s is None and self.measure_frame_count is None:
             raise ValueError("Each step must define measure_duration_s or measure_frame_count.")
         if self.measure_duration_s is not None and self.measure_duration_s <= 0:
             raise ValueError("measure_duration_s must be greater than 0.")
@@ -60,6 +68,10 @@ class AutomationStepResult:
     step_index: int
     step_id: str
     target_displacement: float | None
+    cycle_index: int | None
+    phase: str
+    velocity_mm_min: float | None
+    measure_enabled: bool
     position_before_mm: float | None
     position_after_engage_mm: float | None
     position_after_disengage_mm: float | None

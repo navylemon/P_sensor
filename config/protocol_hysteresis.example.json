@@ -1,0 +1,15 @@
+{
+  "recipe_id": "hysteresis_cycle",
+  "protocol_type": "hysteresis",
+  "metadata": {
+    "description": "Repeated 0 -> max -> 0 displacement cycles at reduced velocity."
+  },
+  "min_displacement_mm": 0.0,
+  "max_displacement_mm": 1.0,
+  "step_increment_mm": 0.1,
+  "cycle_count": 3,
+  "hold_time_s": 0.5,
+  "measure_frame_count": 10,
+  "velocity_mm_min": 5.0,
+  "ready_timeout_s": 15.0
+}

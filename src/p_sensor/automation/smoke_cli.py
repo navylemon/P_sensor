@@ -12,16 +12,14 @@ from p_sensor.automation.runner import ExperimentRunner, NoOpCommandBridge
 from p_sensor.automation.safety import AutomationSafetyPolicy
 from p_sensor.config import APP_ROOT, load_config, resolve_runtime_path
 from p_sensor.models import AppConfig
-from p_sensor.motion import Shot102CommandBridge, Shot102Controller, load_shot102_motion_config
+from p_sensor.motion import ShotCommandBridge, ShotController, load_shot_motion_config
 from p_sensor.services import MeasurementService
 
 
 DEFAULT_APP_CONFIG = "config/channel_settings_automation.example.json"
 DEFAULT_RECIPE = "config/experiment_recipe_smoke.example.json"
-DEFAULT_LOCAL_MOTION_CONFIG = "dev_local/config/shot702_osms20_35.local.json"
-DEFAULT_LEGACY_LOCAL_MOTION_CONFIG = "dev_local/config/shot102_sgsp20_85.local.json"
-DEFAULT_EXAMPLE_MOTION_CONFIG = "config/shot702_osms20_35.example.json"
-DEFAULT_LEGACY_EXAMPLE_MOTION_CONFIG = "config/shot102_sgsp20_85.example.json"
+DEFAULT_LOCAL_MOTION_CONFIG = "dev_local/config/stage_shot702_osms20_35.local.json"
+DEFAULT_EXAMPLE_MOTION_CONFIG = "config/stage_shot702_osms20_35.example.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--motion-config", default=None, help="SHOT motion config JSON path.")
     parser.add_argument("--no-motion", action="store_true", help="Use NoOp motion bridge.")
     parser.add_argument("--allow-ni", action="store_true", help="Allow NI backend when app config requests it.")
+    parser.add_argument("--require-ni", action="store_true", help="Fail unless the app config selects the NI backend.")
+    parser.add_argument("--require-motion", action="store_true", help="Fail if the smoke run would use NoOp motion.")
     parser.add_argument("--include-ao", action="store_true", help="Keep AO channels from the app config.")
     parser.add_argument("--session-label", default="shot702_smoke", help="Automation session label.")
     parser.add_argument("--home-on-connect", action="store_true", help="Allow motion config home_on_connect.")
@@ -43,9 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
 def default_motion_config_path() -> Path:
     for candidate in (
         DEFAULT_LOCAL_MOTION_CONFIG,
-        DEFAULT_LEGACY_LOCAL_MOTION_CONFIG,
         DEFAULT_EXAMPLE_MOTION_CONFIG,
-        DEFAULT_LEGACY_EXAMPLE_MOTION_CONFIG,
     ):
         path = resolve_runtime_path(candidate)
         if path.exists():
@@ -68,7 +66,7 @@ def make_motion_bridge(args: argparse.Namespace):
         return NoOpCommandBridge(), AutomationSafetyPolicy()
 
     motion_config_path = resolve_runtime_path(args.motion_config) if args.motion_config else default_motion_config_path()
-    motion_config = load_shot102_motion_config(motion_config_path)
+    motion_config = load_shot_motion_config(motion_config_path)
     motion_config = replace(
         motion_config,
         home_on_connect=args.home_on_connect,
@@ -80,12 +78,18 @@ def make_motion_bridge(args: argparse.Namespace):
         max_position_mm=motion_config.max_position_mm if motion_config.enforce_software_limits else None,
         require_target_displacement=True,
     )
-    return Shot102CommandBridge(Shot102Controller(motion_config)), safety_policy
+    return ShotCommandBridge(ShotController(motion_config)), safety_policy
 
 
 def run_smoke(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.require_motion and args.no_motion:
+        raise RuntimeError("--require-motion cannot be combined with --no-motion.")
+    if args.require_ni and not args.allow_ni:
+        raise RuntimeError("--require-ni requires --allow-ni so hardware DAQ access is explicit.")
     config = load_config(args.config)
+    if args.require_ni and config.backend != "ni":
+        raise RuntimeError(f"--require-ni expected backend 'ni', got {config.backend!r}.")
     if not args.include_ao:
         config = replace(config, ao_channels=[])
     recipe = load_recipe(args.recipe)
@@ -108,6 +112,8 @@ def run_smoke(argv: Sequence[str] | None = None) -> int:
             ),
             "cwd": str(APP_ROOT),
             "smoke": True,
+            "require_ni": args.require_ni,
+            "require_motion": args.require_motion,
         },
     )
 

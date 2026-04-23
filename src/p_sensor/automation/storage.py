@@ -96,35 +96,48 @@ class AutomationSessionStore:
         *,
         step_index: int,
         step: AutomationStep,
-        measurement_path: Path,
-        window_result: MeasurementWindowResult,
+        measurement_path: Path | None,
+        window_result: MeasurementWindowResult | None,
         position_before_mm: float | None = None,
         position_after_engage_mm: float | None = None,
         position_after_disengage_mm: float | None = None,
         status: str = "completed",
     ) -> AutomationStepResult:
-        average_inputs = {
-            channel.channel_name: {
-                "average_voltage": channel.average_voltage,
-                "average_value": channel.average_value,
-                "unit": channel.unit,
+        average_inputs = {}
+        average_outputs = {}
+        started_at = datetime.now()
+        ended_at = started_at
+        frame_count = 0
+        if window_result is not None:
+            average_inputs = {
+                channel.channel_name: {
+                    "average_voltage": channel.average_voltage,
+                    "average_value": channel.average_value,
+                    "unit": channel.unit,
+                }
+                for channel in window_result.average_inputs
             }
-            for channel in window_result.average_inputs
-        }
-        average_outputs = {
-            channel.channel_name: channel.average_current_ma for channel in window_result.average_outputs
-        }
+            average_outputs = {
+                channel.channel_name: channel.average_current_ma for channel in window_result.average_outputs
+            }
+            started_at = window_result.started_at
+            ended_at = window_result.ended_at
+            frame_count = window_result.frame_count
         result = AutomationStepResult(
             step_index=step_index,
             step_id=step.step_id,
             target_displacement=step.target_displacement,
+            cycle_index=step.cycle_index,
+            phase=step.phase,
+            velocity_mm_min=step.velocity_mm_min,
+            measure_enabled=step.measure_enabled,
             position_before_mm=position_before_mm,
             position_after_engage_mm=position_after_engage_mm,
             position_after_disengage_mm=position_after_disengage_mm,
-            measurement_file=measurement_path.name,
-            started_at=window_result.started_at,
-            ended_at=window_result.ended_at,
-            frame_count=window_result.frame_count,
+            measurement_file="" if measurement_path is None else measurement_path.name,
+            started_at=started_at,
+            ended_at=ended_at,
+            frame_count=frame_count,
             average_inputs=average_inputs,
             average_outputs=average_outputs,
             status=status,
@@ -158,6 +171,10 @@ class AutomationSessionStore:
             "frame_count",
             "status",
             "notes",
+            "cycle_index",
+            "phase",
+            "velocity_mm_min",
+            "measure_enabled",
         ]
         for channel in self.config.ai_channels:
             if not channel.enabled:
@@ -185,6 +202,10 @@ class AutomationSessionStore:
             str(result.frame_count),
             result.status,
             result.notes,
+            "" if result.cycle_index is None else str(result.cycle_index),
+            result.phase,
+            self._format_optional_float(result.velocity_mm_min),
+            "true" if result.measure_enabled else "false",
         ]
         for channel in self.config.ai_channels:
             if not channel.enabled:

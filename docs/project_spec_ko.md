@@ -1,4 +1,4 @@
-# 저항 기반 센서 측정 GUI 프로그램 명세 및 진행 현황
+﻿# 저항 기반 센서 측정 GUI 프로그램 명세 및 진행 현황
 
 최종 갱신: 2026-04-20
 
@@ -42,7 +42,7 @@
 - 자동화 세션 폴더, `session_manifest.json`, `step_summary.csv`, `measurement_XXXX.csv` 저장
 - `OPTOSIGMA SHOT-702` 기반 리니어 스테이지 설정과 SHOT 계열 명령 브리지
 - `OPTOSIGMA OSMS20-35` 변위 기준 `mm -> pulse` 환산 이동
-- `SHOT-702`/`SHOT-102` 수동 점검 CLI와 PowerShell 실행 스크립트
+- `SHOT 계열` 수동 점검 CLI와 PowerShell 실행 스크립트
 - 실장비 기준 SHOT 계열 연결, status 조회, 상대 이동, 방향키 jog, origin 복귀 검증
 - 자동화 step 결과와 `step_summary.csv`에 모션 위치(`position_before_mm`, `position_after_engage_mm`, `position_after_disengage_mm`) 기록
 - 자동화 안전 정책(`AutomationSafetyPolicy`) 기반 목표 변위와 실제 위치 소프트 리밋 검증
@@ -163,7 +163,7 @@
 
 현재 확인된 자동 테스트 범위는 주로 채널 매핑/정규화 관련 테스트다. GUI, CSV 저장, NI 실제 하드웨어 경로는 수동 검증 비중이 높다.
 
-현재 자동 테스트에는 자동화 레시피 로드, 자동화 러너, 자동화 패널, 세션 저장 경로, SHOT 계열 모션 어댑터 단위 테스트가 포함된다. NI 실장비 연동은 아직 수동 검증 비중이 높다. 실제 `SHOT-102` 직렬 통신은 2026-04-20 기준 `COM10`에서 status 조회, 상대 이동, 방향키 jog, origin 복귀까지 수동 검증을 완료했다.
+현재 자동 테스트에는 자동화 레시피 로드, 자동화 러너, 자동화 패널, 세션 저장 경로, SHOT 계열 모션 어댑터 단위 테스트가 포함된다. NI 실장비 연동은 아직 수동 검증 비중이 높다. 실제 `SHOT-702` 직렬 통신은 2026-04-23 기준 `COM10`에서 status 조회, 상대 이동, 방향키 jog, origin 복귀까지 수동 검증을 완료했다.
 
 ## 9. 현재 구현 기준 아키텍처
 
@@ -197,10 +197,10 @@
   시뮬레이션 DAQ와 선택적 SHOT 계열 모션을 사용한 자동화 smoke 실행기
 - `src/p_sensor/automation/storage.py`
   자동화 세션 폴더, manifest, summary, 측정 CSV 저장
-- `src/p_sensor/motion/shot102.py`
-  SHOT 계열 직렬 제어와 `OSMS20-35`/`SGSP20-85` 기준 명령 브리지
-- `src/p_sensor/motion/shot102_cli.py`
-  `SHOT-702`/`SHOT-102` 실장비 status, jog, origin 점검용 CLI
+- `src/p_sensor/motion/shot_series.py`
+  SHOT 계열 직렬 제어와 `OSMS20-35` 기준 명령 브리지
+- `src/p_sensor/motion/shot_cli.py`
+  `SHOT 계열` 실장비 status, jog, origin 점검용 CLI
 - `src/p_sensor/ui/main_window.py`
   메인 GUI, 수동 측정, 자동화 패널, 로그, 설정 적용
 
@@ -234,7 +234,7 @@
 
 1. 사용자 확인형 인터락과 오류 복구 절차 표준화
 2. `move -> settle -> measure -> disengage/origin` 실행 흐름의 수동 하드웨어 체크리스트 문서화
-3. 실제 NI DAQ backend와 `Shot102CommandBridge`를 조합한 전체 자동화 흐름 검증
+3. 실제 NI DAQ backend와 `ShotCommandBridge`를 조합한 전체 자동화 흐름 검증
 4. `main_window.py`에 집중된 자동화 UI를 패널 단위 모듈로 분리
 5. CSV 저장과 설정 직렬화에 대한 자동 테스트 확대
 6. NI 장비와 슬롯 정보를 화면에 표시하는 연결 진단 UI 추가

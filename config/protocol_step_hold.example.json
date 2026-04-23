@@ -1,0 +1,15 @@
+{
+  "recipe_id": "step_hold_0p1mm",
+  "protocol_type": "step_hold",
+  "metadata": {
+    "description": "Quasi-static 0.1 mm step-and-hold sweep from 0 mm to max displacement, then return to 0 mm."
+  },
+  "min_displacement_mm": 0.0,
+  "max_displacement_mm": 1.0,
+  "step_increment_mm": 0.1,
+  "hold_time_s": 1.0,
+  "measure_frame_count": 10,
+  "velocity_mm_min": 10.0,
+  "return_velocity_mm_min": 10.0,
+  "ready_timeout_s": 15.0
+}

@@ -11,12 +11,12 @@ from p_sensor.automation.models import AutomationStep
 from p_sensor.config import resolve_runtime_path
 
 
-SHOT102_SUPPORTED_BAUDRATES = {4800, 9600, 19200, 38400}
-SHOT102_MAX_POSITION_PULSES = 16_777_124
-SHOT102_MIN_SPEED_PPS = 1
-SHOT102_MAX_SPEED_PPS = 20_000
+SHOT_SUPPORTED_BAUDRATES = {4800, 9600, 19200, 38400}
+SHOT_MAX_POSITION_PULSES = 16_777_124
+SHOT_MIN_SPEED_PPS = 1
+SHOT_MAX_SPEED_PPS = 20_000
 SHOT702_MAX_SPEED_PPS = 500_000
-SHOT102_MAX_ACCELERATION_MS = 5_000
+SHOT_MAX_ACCELERATION_MS = 5_000
 
 
 class MotionError(RuntimeError):
@@ -39,7 +39,7 @@ class SerialTransport(Protocol):
 
 
 @dataclass(slots=True)
-class Shot102Status:
+class ShotStatus:
     axis1_position: int
     axis2_position: int
     command_ack: str
@@ -56,23 +56,23 @@ class Shot102Status:
 
 
 @dataclass(slots=True)
-class Shot102MotionConfig:
+class ShotMotionConfig:
     port: str
     axis: int = 1
-    baudrate: int = 9600
+    baudrate: int = 38400
     rtscts: bool = True
     pulses_per_mm: float = 1000.0
     min_position_mm: float = 0.0
-    max_position_mm: float = 85.0
+    max_position_mm: float = 35.0
     enforce_software_limits: bool = True
     home_direction: str = "-"
     disengage_position_mm: float = 0.0
     ready_timeout_s: float = 15.0
     ready_poll_interval_s: float = 0.05
     serial_timeout_s: float = 1.0
-    driver_mode: str = "SHOT-102"
-    stage_model: str = "SIGMAKOKI SGSP20-85"
-    controller_model: str = "SIGMAKOKI SHOT-102"
+    driver_mode: str = "SHOT-702"
+    stage_model: str = "OPTOSIGMA OSMS20-35"
+    controller_model: str = "OPTOSIGMA SHOT-702"
     set_speed_on_connect: bool = True
     minimum_speed_pps: int = 50
     maximum_speed_pps: int = 5000
@@ -86,7 +86,7 @@ class Shot102MotionConfig:
             raise ValueError(f"{self.controller_model} serial port must not be empty.")
         if self.axis not in {1, 2}:
             raise ValueError(f"{self.controller_model} axis must be 1 or 2.")
-        if self.baudrate not in SHOT102_SUPPORTED_BAUDRATES:
+        if self.baudrate not in SHOT_SUPPORTED_BAUDRATES:
             raise ValueError(f"Unsupported {self.controller_model} baudrate: {self.baudrate}")
         if self.pulses_per_mm <= 0:
             raise ValueError("pulses_per_mm must be greater than 0.")
@@ -109,8 +109,8 @@ class Shot102MotionConfig:
             raise ValueError(f"maximum_speed_pps must be {max_speed_pps} or lower.")
         if self.minimum_speed_pps > self.maximum_speed_pps:
             raise ValueError("minimum_speed_pps must be less than or equal to maximum_speed_pps.")
-        if self.acceleration_ms < 0 or self.acceleration_ms > SHOT102_MAX_ACCELERATION_MS:
-            raise ValueError(f"acceleration_ms must be between 0 and {SHOT102_MAX_ACCELERATION_MS}.")
+        if self.acceleration_ms < 0 or self.acceleration_ms > SHOT_MAX_ACCELERATION_MS:
+            raise ValueError(f"acceleration_ms must be between 0 and {SHOT_MAX_ACCELERATION_MS}.")
 
 
 def _is_shot702_mode(driver_mode: str, controller_model: str) -> bool:
@@ -126,7 +126,7 @@ def _default_baudrate(driver_mode: str, controller_model: str) -> int:
 def _max_supported_speed_pps(driver_mode: str, controller_model: str) -> int:
     if _is_shot702_mode(driver_mode, controller_model):
         return SHOT702_MAX_SPEED_PPS
-    return SHOT102_MAX_SPEED_PPS
+    return SHOT_MAX_SPEED_PPS
 
 
 def _load_bool(payload: dict, key: str, default: bool) -> bool:
@@ -142,24 +142,24 @@ def _load_bool(payload: dict, key: str, default: bool) -> bool:
     return bool(value)
 
 
-def parse_shot102_status_reply(reply: str) -> Shot102Status:
+def parse_shot_status_reply(reply: str) -> ShotStatus:
     parts = [part.strip() for part in reply.split(",")]
     if len(parts) != 5:
-        raise MotionError(f"Invalid SHOT-102 status reply: {reply!r}")
+        raise MotionError(f"Invalid SHOT status reply: {reply!r}")
     try:
         axis1_position = int(parts[0])
         axis2_position = int(parts[1])
     except ValueError as exc:
-        raise MotionError(f"Invalid SHOT-102 coordinates in reply: {reply!r}") from exc
+        raise MotionError(f"Invalid SHOT coordinates in reply: {reply!r}") from exc
 
     command_ack, stop_ack, ready_ack = parts[2], parts[3], parts[4]
     if command_ack not in {"K", "X"}:
-        raise MotionError(f"Unexpected SHOT-102 command ACK: {command_ack!r}")
+        raise MotionError(f"Unexpected SHOT command ACK: {command_ack!r}")
     if stop_ack not in {"K", "L", "M", "W"}:
-        raise MotionError(f"Unexpected SHOT-102 stop ACK: {stop_ack!r}")
+        raise MotionError(f"Unexpected SHOT stop ACK: {stop_ack!r}")
     if ready_ack not in {"R", "B"}:
-        raise MotionError(f"Unexpected SHOT-102 ready ACK: {ready_ack!r}")
-    return Shot102Status(
+        raise MotionError(f"Unexpected SHOT ready ACK: {ready_ack!r}")
+    return ShotStatus(
         axis1_position=axis1_position,
         axis2_position=axis2_position,
         command_ack=command_ack,
@@ -168,13 +168,13 @@ def parse_shot102_status_reply(reply: str) -> Shot102Status:
     )
 
 
-def load_shot102_motion_config(path: str | Path) -> Shot102MotionConfig:
+def load_shot_motion_config(path: str | Path) -> ShotMotionConfig:
     config_path = resolve_runtime_path(path)
     payload = json.loads(config_path.read_text(encoding="utf-8"))
-    driver_mode = str(payload.get("driver_mode", "SHOT-102"))
-    controller_model = str(payload.get("controller_model", "SIGMAKOKI SHOT-102"))
+    driver_mode = str(payload.get("driver_mode", "SHOT-702"))
+    controller_model = str(payload.get("controller_model", "OPTOSIGMA SHOT-702"))
     default_baudrate = _default_baudrate(driver_mode, controller_model)
-    return Shot102MotionConfig(
+    return ShotMotionConfig(
         port=str(payload.get("port", "")).strip(),
         axis=int(payload.get("axis", 1)),
         baudrate=int(payload.get("baudrate", default_baudrate)),
@@ -189,7 +189,7 @@ def load_shot102_motion_config(path: str | Path) -> Shot102MotionConfig:
         ready_poll_interval_s=float(payload.get("ready_poll_interval_s", 0.05)),
         serial_timeout_s=float(payload.get("serial_timeout_s", 1.0)),
         driver_mode=driver_mode,
-        stage_model=str(payload.get("stage_model", "SIGMAKOKI SGSP20-85")),
+        stage_model=str(payload.get("stage_model", "OPTOSIGMA OSMS20-35")),
         controller_model=controller_model,
         set_speed_on_connect=_load_bool(payload, "set_speed_on_connect", True),
         minimum_speed_pps=int(payload.get("minimum_speed_pps", 50)),
@@ -201,10 +201,10 @@ def load_shot102_motion_config(path: str | Path) -> Shot102MotionConfig:
     )
 
 
-class Shot102Controller:
+class ShotController:
     COMMAND_SUFFIX = "\r\n"
 
-    def __init__(self, config: Shot102MotionConfig, transport: SerialTransport | None = None) -> None:
+    def __init__(self, config: ShotMotionConfig, transport: SerialTransport | None = None) -> None:
         self.config = config
         self._transport = transport
 
@@ -246,8 +246,8 @@ class Shot102Controller:
     def get_rom_version(self) -> str:
         return self._send_query("?:V")
 
-    def get_status(self) -> Shot102Status:
-        return parse_shot102_status_reply(self._send_query("Q:"))
+    def get_status(self) -> ShotStatus:
+        return parse_shot_status_reply(self._send_query("Q:"))
 
     def is_ready(self) -> bool:
         return self._send_query("!:") == "R"
@@ -261,10 +261,14 @@ class Shot102Controller:
             time.sleep(self.config.ready_poll_interval_s)
         raise MotionError(f"{self.config.controller_model} did not become ready within {timeout:.2f}s.")
 
-    def home(self, *, axis: int, direction: str) -> None:
+    def home(self, *, axis: int, direction: str | None = None) -> None:
         self._validate_axis(axis)
-        self._validate_direction(direction)
-        self._send_expect_ok(f"H:{axis}{direction}")
+        if _is_shot702_mode(self.config.driver_mode, self.config.controller_model):
+            self._send_expect_ok(f"H:{axis}")
+            return
+        home_direction = self.config.home_direction if direction is None else direction
+        self._validate_direction(home_direction)
+        self._send_expect_ok(f"H:{axis}{home_direction}")
 
     def origin(self, *, axis: int, direction: str | None = None, reset_logical_zero: bool = False) -> None:
         origin_direction = self.config.home_direction if direction is None else direction
@@ -304,6 +308,18 @@ class Shot102Controller:
             f"D:{axis}S{int(minimum_speed_pps)}F{int(maximum_speed_pps)}R{int(acceleration_ms)}"
         )
 
+    def set_velocity_mm_min(self, *, axis: int, velocity_mm_min: float) -> None:
+        if velocity_mm_min <= 0:
+            raise ValueError("velocity_mm_min must be greater than 0.")
+        speed_pps = self.velocity_mm_min_to_pps(velocity_mm_min)
+        minimum_speed_pps = min(self.config.minimum_speed_pps, speed_pps)
+        self.set_speed(
+            axis=axis,
+            minimum_speed_pps=minimum_speed_pps,
+            maximum_speed_pps=speed_pps,
+            acceleration_ms=self.config.acceleration_ms,
+        )
+
     def set_motor_hold(self, *, axis: int, hold: bool) -> None:
         self._validate_axis(axis)
         state = "1" if hold else "0"
@@ -333,6 +349,11 @@ class Shot102Controller:
 
     def pulses_to_mm(self, pulses: int) -> float:
         return pulses / self.config.pulses_per_mm
+
+    def velocity_mm_min_to_pps(self, velocity_mm_min: float) -> int:
+        if velocity_mm_min <= 0:
+            raise ValueError("velocity_mm_min must be greater than 0.")
+        return max(1, int(round((velocity_mm_min * self.config.pulses_per_mm) / 60.0)))
 
     def _send_expect_ok(self, command: str) -> None:
         response = self._send_query(command)
@@ -370,24 +391,24 @@ class Shot102Controller:
 
     def _validate_speed(self, *, minimum_speed_pps: int, maximum_speed_pps: int, acceleration_ms: int) -> None:
         max_speed_pps = _max_supported_speed_pps(self.config.driver_mode, self.config.controller_model)
-        if minimum_speed_pps < SHOT102_MIN_SPEED_PPS or minimum_speed_pps > max_speed_pps:
+        if minimum_speed_pps < SHOT_MIN_SPEED_PPS or minimum_speed_pps > max_speed_pps:
             raise ValueError(
-                f"minimum_speed_pps must be between {SHOT102_MIN_SPEED_PPS} and {max_speed_pps}."
+                f"minimum_speed_pps must be between {SHOT_MIN_SPEED_PPS} and {max_speed_pps}."
             )
-        if maximum_speed_pps < SHOT102_MIN_SPEED_PPS or maximum_speed_pps > max_speed_pps:
+        if maximum_speed_pps < SHOT_MIN_SPEED_PPS or maximum_speed_pps > max_speed_pps:
             raise ValueError(
-                f"maximum_speed_pps must be between {SHOT102_MIN_SPEED_PPS} and {max_speed_pps}."
+                f"maximum_speed_pps must be between {SHOT_MIN_SPEED_PPS} and {max_speed_pps}."
             )
         if minimum_speed_pps > maximum_speed_pps:
             raise ValueError("minimum_speed_pps must be less than or equal to maximum_speed_pps.")
-        if acceleration_ms < 0 or acceleration_ms > SHOT102_MAX_ACCELERATION_MS:
-            raise ValueError(f"acceleration_ms must be between 0 and {SHOT102_MAX_ACCELERATION_MS}.")
+        if acceleration_ms < 0 or acceleration_ms > SHOT_MAX_ACCELERATION_MS:
+            raise ValueError(f"acceleration_ms must be between 0 and {SHOT_MAX_ACCELERATION_MS}.")
 
     def _validate_absolute_pulses(self, position_pulses: int) -> None:
-        if abs(position_pulses) > SHOT102_MAX_POSITION_PULSES:
+        if abs(position_pulses) > SHOT_MAX_POSITION_PULSES:
             raise MotionError(
-                f"Requested position {position_pulses} pulses exceeds SHOT-102 coordinate range "
-                f"+/-{SHOT102_MAX_POSITION_PULSES} pulses."
+                f"Requested position {position_pulses} pulses exceeds SHOT coordinate range "
+                f"+/-{SHOT_MAX_POSITION_PULSES} pulses."
             )
         if not self.config.enforce_software_limits:
             return
@@ -399,10 +420,10 @@ class Shot102Controller:
             )
 
     def _validate_relative_pulses(self, *, axis: int, delta_pulses: int) -> None:
-        if abs(delta_pulses) > SHOT102_MAX_POSITION_PULSES:
+        if abs(delta_pulses) > SHOT_MAX_POSITION_PULSES:
             raise MotionError(
-                f"Requested relative move {delta_pulses} pulses exceeds SHOT-102 coordinate range "
-                f"+/-{SHOT102_MAX_POSITION_PULSES} pulses."
+                f"Requested relative move {delta_pulses} pulses exceeds SHOT coordinate range "
+                f"+/-{SHOT_MAX_POSITION_PULSES} pulses."
             )
         if not self.config.enforce_software_limits:
             return
@@ -430,8 +451,8 @@ class Shot102Controller:
         )
 
 
-class Shot102CommandBridge(CommandBridge):
-    def __init__(self, controller: Shot102Controller) -> None:
+class ShotCommandBridge(CommandBridge):
+    def __init__(self, controller: ShotController) -> None:
         self.controller = controller
         self.config = controller.config
 
@@ -440,6 +461,11 @@ class Shot102CommandBridge(CommandBridge):
 
     def disconnect(self) -> None:
         self.controller.disconnect()
+
+    def set_velocity_mm_min(self, velocity_mm_min: float | None) -> None:
+        if velocity_mm_min is None:
+            return
+        self.controller.set_velocity_mm_min(axis=self.config.axis, velocity_mm_min=velocity_mm_min)
 
     def engage(self, step: AutomationStep) -> None:
         target_pulses = self._displacement_to_pulses(step.target_displacement or 0.0)

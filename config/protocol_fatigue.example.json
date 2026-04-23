@@ -1,0 +1,16 @@
+{
+  "recipe_id": "fatigue_1000_cycles",
+  "protocol_type": "fatigue",
+  "metadata": {
+    "description": "Long-term durability run with checkpoint measurements during repeated max/min displacement cycles."
+  },
+  "min_displacement_mm": 0.0,
+  "max_displacement_mm": 1.0,
+  "cycle_count": 1000,
+  "checkpoint_interval_cycles": 10,
+  "hold_time_s": 0.1,
+  "measure_frame_count": 10,
+  "velocity_mm_min": 50.0,
+  "return_velocity_mm_min": 50.0,
+  "ready_timeout_s": 20.0
+}

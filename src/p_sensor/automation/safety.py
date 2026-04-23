@@ -9,11 +9,22 @@ class AutomationSafetyError(RuntimeError):
     pass
 
 
+class AutomationReadyTimeoutError(AutomationSafetyError):
+    def __init__(self, *, step_id: str, phase: str, timeout_s: float | None) -> None:
+        timeout_text = "configured timeout" if timeout_s is None else f"{timeout_s:.6g} s"
+        super().__init__(f"Step {step_id!r} did not become ready after {phase} within {timeout_text}.")
+        self.step_id = step_id
+        self.phase = phase
+        self.timeout_s = timeout_s
+
+
 @dataclass(slots=True)
 class AutomationSafetyPolicy:
     min_position_mm: float | None = None
     max_position_mm: float | None = None
     require_target_displacement: bool = False
+    require_operator_confirmation: bool = False
+    operator_confirmed: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -26,6 +37,10 @@ class AutomationSafetyPolicy:
     def validate_recipe(self, recipe: AutomationRecipe) -> None:
         for step in recipe.steps:
             self.validate_step(step)
+
+    def validate_start(self) -> None:
+        if self.require_operator_confirmation and not self.operator_confirmed:
+            raise AutomationSafetyError("Operator confirmation is required before running hardware automation.")
 
     def validate_step(self, step: AutomationStep) -> None:
         if step.target_displacement is None:

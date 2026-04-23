@@ -55,7 +55,7 @@ from p_sensor.config import (
     save_config,
     validate_app_config,
 )
-from p_sensor.motion import Shot102CommandBridge, Shot102Controller, load_shot102_motion_config
+from p_sensor.motion import ShotCommandBridge, ShotController, load_shot_motion_config
 from p_sensor.models import (
     AnalogInputChannelConfig,
     AnalogInputReading,
@@ -69,6 +69,7 @@ from p_sensor.models import (
 from p_sensor.profiles import AppProfile, IO_APP_PROFILE
 from p_sensor.services import MeasurementService
 from p_sensor.storage import CsvRecorder, prepare_session_paths
+from p_sensor.ui.automation_panel import AutomationPanel
 from p_sensor.ui.recipe_helper_dialog import RecipeHelperDialog
 
 
@@ -467,60 +468,25 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_automation_group(self) -> QWidget:
-        group = QGroupBox("Automation")
-        layout = QVBoxLayout(group)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
+        panel = AutomationPanel(badge_styler=lambda label, tone: self._set_badge_style(label, tone=tone))
+        panel.load_recipe_requested.connect(self._load_automation_recipe_dialog)
+        panel.recipe_helper_requested.connect(self._open_recipe_helper_dialog)
+        panel.load_motion_requested.connect(self._load_motion_config_dialog)
+        panel.run_requested.connect(self._start_automation)
+        panel.stop_requested.connect(self._request_stop_automation)
 
-        self.recipe_path_edit = QLineEdit()
-        self.recipe_path_edit.setReadOnly(True)
-        self.recipe_path_edit.setPlaceholderText("Select automation recipe JSON")
-        load_recipe_button = QPushButton("Load Recipe")
-        load_recipe_button.clicked.connect(self._load_automation_recipe_dialog)
-        self.load_recipe_button = load_recipe_button
-        self.recipe_helper_button = QPushButton("Recipe Helper")
-        self.recipe_helper_button.clicked.connect(self._open_recipe_helper_dialog)
-        self.motion_config_path_edit = QLineEdit()
-        self.motion_config_path_edit.setReadOnly(True)
-        self.motion_config_path_edit.setPlaceholderText("Optional SHOT motion config JSON")
-        load_motion_button = QPushButton("Load Motion")
-        load_motion_button.clicked.connect(self._load_motion_config_dialog)
-        self.load_motion_button = load_motion_button
-
-        self.automation_status_label = QLabel("Idle")
-        self.automation_step_label = QLabel("No recipe loaded")
-        self.motion_status_label = QLabel("Motion bridge: disabled")
-        self.automation_step_label.setWordWrap(True)
-        self.motion_status_label.setWordWrap(True)
-        self._set_badge_style(self.automation_status_label, tone="muted")
-        self._set_badge_style(self.automation_step_label, tone="neutral")
-        self._set_badge_style(self.motion_status_label, tone="muted")
-
-        grid.addWidget(QLabel("Recipe"), 0, 0, 1, 2)
-        grid.addWidget(self.recipe_path_edit, 1, 0)
-        grid.addWidget(load_recipe_button, 1, 1)
-        grid.addWidget(self.recipe_helper_button, 2, 0, 1, 2)
-        grid.addWidget(QLabel("Motion Config"), 3, 0, 1, 2)
-        grid.addWidget(self.motion_config_path_edit, 4, 0)
-        grid.addWidget(load_motion_button, 4, 1)
-        grid.addWidget(QLabel("Status"), 5, 0)
-        grid.addWidget(QLabel("Current Step"), 5, 1)
-        grid.addWidget(self.automation_status_label, 6, 0)
-        grid.addWidget(self.automation_step_label, 6, 1)
-        grid.addWidget(self.motion_status_label, 7, 0, 1, 2)
-
-        button_row = QHBoxLayout()
-        self.run_automation_button = QPushButton("Run Automation")
-        self.stop_automation_button = QPushButton("Stop Automation")
-        self.run_automation_button.clicked.connect(self._start_automation)
-        self.stop_automation_button.clicked.connect(self._request_stop_automation)
-        button_row.addWidget(self.run_automation_button)
-        button_row.addWidget(self.stop_automation_button)
-
-        layout.addLayout(grid)
-        layout.addLayout(button_row)
-        return group
+        self.automation_panel = panel
+        self.recipe_path_edit = panel.recipe_path_edit
+        self.load_recipe_button = panel.load_recipe_button
+        self.recipe_helper_button = panel.recipe_helper_button
+        self.motion_config_path_edit = panel.motion_config_path_edit
+        self.load_motion_button = panel.load_motion_button
+        self.automation_status_label = panel.automation_status_label
+        self.automation_step_label = panel.automation_step_label
+        self.motion_status_label = panel.motion_status_label
+        self.run_automation_button = panel.run_automation_button
+        self.stop_automation_button = panel.stop_automation_button
+        return panel
 
     def _build_monitor_group(self) -> QWidget:
         group = QGroupBox("Live Monitor")
@@ -1534,7 +1500,7 @@ class MainWindow(QMainWindow):
             return
         try:
             motion_path = resolve_runtime_path(file_path)
-            motion_config = load_shot102_motion_config(motion_path)
+            motion_config = load_shot_motion_config(motion_path)
             self.motion_config_path = motion_path
             self.motion_config = motion_config
             self.motion_config_path_edit.setText(str(motion_path))
@@ -1555,6 +1521,9 @@ class MainWindow(QMainWindow):
             return
         if self.automation_recipe is None:
             self._show_error("Recipe Missing", "Load an automation recipe before running automation.")
+            return
+        operator_confirmed = self._confirm_automation_start()
+        if not operator_confirmed:
             return
         if not self._apply_ui_config(reset_history=False):
             return
@@ -1581,7 +1550,7 @@ class MainWindow(QMainWindow):
             command_bridge=command_bridge,
             event_callback=self._queue_automation_event,
             stop_event=self.automation_stop_event,
-            safety_policy=self._make_automation_safety_policy(),
+            safety_policy=self._make_automation_safety_policy(operator_confirmed=operator_confirmed),
         )
 
         def run_automation() -> None:
@@ -1608,22 +1577,40 @@ class MainWindow(QMainWindow):
             self.motion_status_label.setText("Motion bridge: disabled")
             self._set_badge_style(self.motion_status_label, tone="muted")
             return NoOpCommandBridge()
-        controller = Shot102Controller(self.motion_config)
+        controller = ShotController(self.motion_config)
         self.motion_status_label.setText(
             f"{self.motion_config.controller_model} {self.motion_config.port} axis {self.motion_config.axis}"
         )
         self._set_badge_style(self.motion_status_label, tone="info")
-        return Shot102CommandBridge(controller)
+        return ShotCommandBridge(controller)
 
-    def _make_automation_safety_policy(self) -> AutomationSafetyPolicy:
+    def _confirm_automation_start(self) -> bool:
+        if self.motion_config is None:
+            return True
+        result = QMessageBox.question(
+            self,
+            "Confirm Automation",
+            "Confirm the stage path is clear, emergency stop is reachable, and the current origin is valid before running hardware automation.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return result == QMessageBox.StandardButton.Yes
+
+    def _make_automation_safety_policy(self, *, operator_confirmed: bool = False) -> AutomationSafetyPolicy:
         if self.motion_config is None:
             return AutomationSafetyPolicy()
         if not self.motion_config.enforce_software_limits:
-            return AutomationSafetyPolicy(require_target_displacement=True)
+            return AutomationSafetyPolicy(
+                require_target_displacement=True,
+                require_operator_confirmation=True,
+                operator_confirmed=operator_confirmed,
+            )
         return AutomationSafetyPolicy(
             min_position_mm=self.motion_config.min_position_mm,
             max_position_mm=self.motion_config.max_position_mm,
             require_target_displacement=True,
+            require_operator_confirmation=True,
+            operator_confirmed=operator_confirmed,
         )
 
     def _request_stop_automation(self, *_args, wait: bool = False) -> None:
@@ -1689,9 +1676,15 @@ class MainWindow(QMainWindow):
         if event_name == "step_started":
             self.automation_status_label.setText("Running")
             self._set_badge_style(self.automation_status_label, tone="running")
-            self.automation_step_label.setText(f"Step {payload['step_index']}: {payload['step_id']}")
+            phase = payload.get("phase") or "step"
+            cycle = payload.get("cycle_index")
+            cycle_prefix = "" if cycle is None else f"Cycle {cycle} "
+            self.automation_step_label.setText(
+                f"{cycle_prefix}Step {payload['step_index']}: {payload['step_id']}"
+            )
             self._log(
-                f"Automation step started: {payload['step_id']} target={payload['target_displacement']}"
+                f"Automation step started: {payload['step_id']} phase={phase} "
+                f"target={payload['target_displacement']} speed={payload.get('velocity_mm_min')}"
             )
             return
         if event_name == "step_completed":
@@ -1710,6 +1703,17 @@ class MainWindow(QMainWindow):
             return
         if event_name == "session_failed":
             self._log(f"Automation session failed: {payload['session_id']}")
+            return
+        if event_name == "motion_abort_requested":
+            self._log(f"Motion abort requested after automation {payload['reason']}")
+            return
+        if event_name == "motion_abort_failed":
+            self._log(f"Motion abort failed after automation {payload['reason']}: {payload['error']}")
+            return
+        if event_name == "recovery_required":
+            self.motion_status_label.setText("Recovery required")
+            self._set_badge_style(self.motion_status_label, tone="warning")
+            self._log(payload["message"])
             return
 
     def _readonly_item(self, text: str) -> QTableWidgetItem:

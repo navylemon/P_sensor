@@ -6,12 +6,14 @@ from threading import Event
 from typing import Protocol
 
 from p_sensor.automation.models import AutomationRecipe, AutomationSessionOptions, AutomationSessionResult, AutomationStep
-from p_sensor.automation.safety import AutomationSafetyPolicy
+from p_sensor.automation.safety import AutomationReadyTimeoutError, AutomationSafetyPolicy
 from p_sensor.automation.storage import AutomationSessionStore
 from p_sensor.services import MeasurementService, MeasurementWindowCancelledError
 
 
 class CommandBridge(Protocol):
+    def set_velocity_mm_min(self, velocity_mm_min: float | None) -> None: ...
+
     def engage(self, step: AutomationStep) -> None: ...
 
     def disengage(self, step: AutomationStep) -> None: ...
@@ -24,6 +26,9 @@ class CommandBridge(Protocol):
 
 
 class NoOpCommandBridge:
+    def set_velocity_mm_min(self, velocity_mm_min: float | None) -> None:
+        return None
+
     def engage(self, step: AutomationStep) -> None:
         return None
 
@@ -67,6 +72,7 @@ class ExperimentRunner:
         recipe: AutomationRecipe,
         options: AutomationSessionOptions,
     ) -> AutomationSessionResult:
+        self.safety_policy.validate_start()
         self.safety_policy.validate_recipe(recipe)
         started_at = self._now()
         store = AutomationSessionStore(
@@ -91,11 +97,11 @@ class ExperimentRunner:
             self._emit("session_completed", session_id=result.session_id, step_count=len(result.step_results))
             return result
         except AutomationCancelledError:
-            self.command_bridge.abort()
+            self._abort_after_interruption(reason="cancelled")
             self._emit("session_cancelled", session_id=store.session_id)
             raise
         except Exception:
-            self.command_bridge.abort()
+            self._abort_after_interruption(reason="failed")
             self._emit("session_failed", session_id=store.session_id)
             raise
         finally:
@@ -109,14 +115,19 @@ class ExperimentRunner:
             step_index=step_index,
             step_id=step.step_id,
             target_displacement=step.target_displacement,
+            cycle_index=step.cycle_index,
+            phase=step.phase,
+            velocity_mm_min=step.velocity_mm_min,
+            measure_enabled=step.measure_enabled,
         )
         position_before_mm = self._get_motion_position_mm()
         self.safety_policy.validate_position_mm(
             position_before_mm,
             label=f"position before step {step.step_id!r}",
         )
+        self._apply_step_velocity(step)
         self.command_bridge.engage(step)
-        self.command_bridge.wait_until_ready(step.ready_timeout_s)
+        self._wait_until_ready(step, phase="engage")
         position_after_engage_mm = self._get_motion_position_mm()
         self.safety_policy.validate_position_mm(
             position_after_engage_mm,
@@ -127,22 +138,25 @@ class ExperimentRunner:
             self.sleep_fn(step.settle_time_s)
         self._ensure_not_cancelled()
 
-        try:
-            window_result = self.measurement_service.collect_window(
-                duration_s=step.measure_duration_s,
-                frame_count=step.measure_frame_count,
-                stop_event=self.stop_event,
+        window_result = None
+        measurement_path = None
+        if step.measure_enabled:
+            try:
+                window_result = self.measurement_service.collect_window(
+                    duration_s=step.measure_duration_s,
+                    frame_count=step.measure_frame_count,
+                    stop_event=self.stop_event,
+                )
+            except MeasurementWindowCancelledError as exc:
+                raise AutomationCancelledError(str(exc)) from exc
+            measurement_path = store.write_measurement_window(
+                step_index=step_index,
+                window_result=window_result,
             )
-        except MeasurementWindowCancelledError as exc:
-            raise AutomationCancelledError(str(exc)) from exc
-        measurement_path = store.write_measurement_window(
-            step_index=step_index,
-            window_result=window_result,
-        )
         position_after_disengage_mm = None
         if step.disengage_after_measure:
             self.command_bridge.disengage(step)
-            self.command_bridge.wait_until_ready(step.ready_timeout_s)
+            self._wait_until_ready(step, phase="disengage")
             position_after_disengage_mm = self._get_motion_position_mm()
             self.safety_policy.validate_position_mm(
                 position_after_disengage_mm,
@@ -163,6 +177,10 @@ class ExperimentRunner:
             step_id=step.step_id,
             measurement_file=result.measurement_file,
             frame_count=result.frame_count,
+            cycle_index=step.cycle_index,
+            phase=step.phase,
+            velocity_mm_min=step.velocity_mm_min,
+            measure_enabled=step.measure_enabled,
         )
 
         self._ensure_not_cancelled()
@@ -195,6 +213,35 @@ class ExperimentRunner:
         disconnect = getattr(self.command_bridge, "disconnect", None)
         if callable(disconnect):
             disconnect()
+
+    def _abort_after_interruption(self, *, reason: str) -> None:
+        self._emit("motion_abort_requested", reason=reason)
+        try:
+            self.command_bridge.abort()
+        except Exception as exc:
+            self._emit("motion_abort_failed", reason=reason, error=str(exc))
+        self._emit(
+            "recovery_required",
+            reason=reason,
+            message="Confirm motion state, clear the controller error if needed, then re-home or reset the logical origin before the next automation run.",
+        )
+
+    def _wait_until_ready(self, step: AutomationStep, *, phase: str) -> None:
+        try:
+            self.command_bridge.wait_until_ready(step.ready_timeout_s)
+        except TimeoutError as exc:
+            raise AutomationReadyTimeoutError(
+                step_id=step.step_id,
+                phase=phase,
+                timeout_s=step.ready_timeout_s,
+            ) from exc
+
+    def _apply_step_velocity(self, step: AutomationStep) -> None:
+        if step.velocity_mm_min is None:
+            return
+        set_velocity = getattr(self.command_bridge, "set_velocity_mm_min", None)
+        if callable(set_velocity):
+            set_velocity(step.velocity_mm_min)
 
     def _get_motion_position_mm(self) -> float | None:
         get_position = getattr(self.command_bridge, "get_position_mm", None)

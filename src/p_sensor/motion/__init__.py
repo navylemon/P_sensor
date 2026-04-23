@@ -1,19 +1,19 @@
-from p_sensor.motion.shot102 import (
+from p_sensor.motion.shot_series import (
     MotionError,
-    Shot102CommandBridge,
-    Shot102Controller,
-    Shot102MotionConfig,
-    Shot102Status,
-    load_shot102_motion_config,
-    parse_shot102_status_reply,
+    ShotCommandBridge,
+    ShotController,
+    ShotMotionConfig,
+    ShotStatus,
+    load_shot_motion_config,
+    parse_shot_status_reply,
 )
 
 __all__ = [
     "MotionError",
-    "Shot102CommandBridge",
-    "Shot102Controller",
-    "Shot102MotionConfig",
-    "Shot102Status",
-    "load_shot102_motion_config",
-    "parse_shot102_status_reply",
+    "ShotCommandBridge",
+    "ShotController",
+    "ShotMotionConfig",
+    "ShotStatus",
+    "load_shot_motion_config",
+    "parse_shot_status_reply",
 ]

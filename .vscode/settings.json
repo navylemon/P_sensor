@@ -15,15 +15,20 @@
     "**/examples": true,
     "**/.venv_broken": true,
     "**/pytest-cache-files-*": true,
-    "**/__pycache__": true
+    "**/.venv": true,
+    "**/.ruff_cache": true,
+    "**/__pycache__": true,
+    "**/.pytest_cache": true
   },
   "search.exclude": {
     "**/tests": true,
     "**/examples": true,
+    "**/.ruff_cache": true,
     "**/dev_local": true,
     "**/.venv": true,
     "**/.venv_broken": true,
     "**/pytest-cache-files-*": true,
-    "**/__pycache__": true
+    "**/__pycache__": true,
+    "**/.pytest_cache": true
   }
 }

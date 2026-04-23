@@ -1,0 +1,15 @@
+{
+  "recipe_id": "speed_dependency",
+  "protocol_type": "speed_dependency",
+  "metadata": {
+    "description": "Run identical displacement sweeps at multiple velocities for strain-rate dependency analysis."
+  },
+  "min_displacement_mm": 0.0,
+  "max_displacement_mm": 1.0,
+  "step_increment_mm": 0.1,
+  "hold_time_s": 0.2,
+  "measure_frame_count": 10,
+  "velocities_mm_min": [1.0, 10.0, 50.0],
+  "return_velocity_mm_min": 50.0,
+  "ready_timeout_s": 20.0
+}
