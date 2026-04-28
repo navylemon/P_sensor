@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from p_sensor.acquisition.base import BackendError, MeasurementBackend
+from p_sensor.calculations import compute_input_reading
 from p_sensor.config import normalize_physical_channel
 from p_sensor.models import AnalogInputReading, AnalogOutputState, MeasurementFrame
 
@@ -151,15 +152,11 @@ class NiDaqBackend(MeasurementBackend):
         inputs: list[AnalogInputReading] = []
         for value_index, (channel_index, channel) in enumerate(active_inputs):
             voltage = averaged[value_index]
-            scaled_value = (voltage * channel.scale) + channel.offset
             inputs.append(
-                AnalogInputReading(
+                compute_input_reading(
                     channel_index=channel_index,
-                    channel_name=channel.name,
+                    channel=channel,
                     voltage=voltage,
-                    scaled_value=scaled_value,
-                    unit=channel.engineering_unit,
-                    status="ok" if abs(voltage) < 4.9 else "limit",
                 )
             )
 

@@ -1,7 +1,31 @@
 {
   "recipe_id": "shot702_smoke",
   "metadata": {
-    "description": "Single-step smoke recipe for SHOT-702 orchestration verification."
+    "description": "Single-step smoke recipe for SHOT-702 orchestration verification. Contact detection is disabled because the simulated DAQ signal is not position-coupled.",
+    "enable_contact_detection": false,
+    "contact_stage_axis": 1,
+    "contact_channel_index": 0,
+    "contact_scan_speed_mm_s": 0.02,
+    "contact_scan_step_mm": 0.01,
+    "contact_max_travel_mm": 1.0,
+    "contact_delta_resistance_threshold_ohm": 1.0,
+    "contact_baseline_duration_s": 0.2,
+    "contact_stable_duration_s": 0.05,
+    "contact_descent_direction": 1,
+    "contact_use_as_zero": true,
+    "contact_detection": {
+      "enable_contact_detection": false,
+      "contact_stage_axis": 1,
+      "contact_channel_index": 0,
+      "contact_scan_speed_mm_s": 0.02,
+      "contact_scan_step_mm": 0.01,
+      "contact_max_travel_mm": 1.0,
+      "contact_delta_resistance_threshold_ohm": 1.0,
+      "contact_baseline_duration_s": 0.2,
+      "contact_stable_duration_s": 0.05,
+      "contact_descent_direction": 1,
+      "contact_use_as_zero": true
+    }
   },
   "steps": [
     {

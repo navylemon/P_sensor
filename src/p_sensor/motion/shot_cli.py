@@ -8,6 +8,7 @@ from p_sensor.motion.shot_series import (
     MotionError,
     ShotController,
     ShotMotionConfig,
+    create_shot_controller,
     load_shot_motion_config,
 )
 
@@ -17,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Small SHOT command-line tool for connection checks and cautious stage moves."
     )
     parser.add_argument("--config", help="Optional SHOT JSON config path.")
-    parser.add_argument("--port", default=None, help="Serial port, for example COM10.")
+    parser.add_argument("--port", default=None, help="Serial port, for example COM7.")
     parser.add_argument("--axis", type=int, default=None, choices=(1, 2), help="Stage axis to control.")
     parser.add_argument("--baudrate", type=int, default=None, help="RS-232C baudrate.")
     parser.add_argument("--pulses-per-mm", type=float, default=None, help="Motion conversion factor.")
@@ -76,7 +77,7 @@ def config_from_args(args: argparse.Namespace) -> ShotMotionConfig:
         config = load_shot_motion_config(args.config)
     else:
         config = ShotMotionConfig(
-            port=args.port or "COM10",
+            port=args.port or "COM7",
             axis=args.axis or 1,
             baudrate=args.baudrate or 9600,
             home_on_connect=False,
@@ -200,7 +201,7 @@ def run_jog_mode(
 def main() -> int:
     args = build_parser().parse_args()
     config = config_from_args(args)
-    controller = ShotController(config)
+    controller = create_shot_controller(config)
     should_print_status = args.status or not any(
         (
             args.home,

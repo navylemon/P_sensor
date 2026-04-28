@@ -4,12 +4,30 @@ from p_sensor.automation.builder import (
     recipe_to_dict,
     save_recipe,
 )
+from p_sensor.automation.contact import (
+    ContactDetectionCancelledError,
+    ContactDetectionConfig,
+    ContactDetectionError,
+    ContactDetectionResult,
+    ContactDetectionSample,
+    ContactDetector,
+)
 from p_sensor.automation.models import (
     AutomationRecipe,
     AutomationSessionOptions,
     AutomationSessionResult,
     AutomationStep,
     AutomationStepResult,
+)
+from p_sensor.automation.progress import (
+    AutomationProgressEstimator,
+    PhaseDurationEstimate,
+    ProgressEstimatorConfig,
+    ProgressSnapshot,
+    RecipeDurationEstimate,
+    StepDurationEstimate,
+    estimate_recipe_duration,
+    estimate_step_duration,
 )
 from p_sensor.automation.recipe import load_recipe, recipe_from_dict
 from p_sensor.automation.protocols import ProtocolRecipeSpec, compile_protocol_recipe, protocol_spec_from_dict
@@ -34,11 +52,25 @@ __all__ = [
     "AutomationReadyTimeoutError",
     "AutomationSafetyError",
     "AutomationSafetyPolicy",
+    "AutomationProgressEstimator",
     "ExperimentRunner",
     "NoOpCommandBridge",
+    "ContactDetectionCancelledError",
+    "ContactDetectionConfig",
+    "ContactDetectionError",
+    "ContactDetectionResult",
+    "ContactDetectionSample",
+    "ContactDetector",
+    "PhaseDurationEstimate",
+    "ProgressEstimatorConfig",
+    "ProgressSnapshot",
+    "RecipeDurationEstimate",
+    "StepDurationEstimate",
     "build_displacement_sweep_recipe",
     "build_session_identifier",
     "compile_protocol_recipe",
+    "estimate_recipe_duration",
+    "estimate_step_duration",
     "load_recipe",
     "normalize_session_label",
     "protocol_spec_from_dict",

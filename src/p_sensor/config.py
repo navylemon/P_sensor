@@ -21,6 +21,7 @@ DEFAULT_EXPORT_DIRECTORY = "dev_local/exports"
 DEFAULT_AI_MODULE_SLOT = 1
 DEFAULT_AO_MODULE_SLOT = 2
 SUPPORTED_BACKENDS = {"simulation", "ni"}
+SUPPORTED_AI_MEASUREMENT_MODES = {"resistance", "voltage"}
 MAX_CDAQ_9174_SLOTS = 4
 PROJECT_LOCAL_ANCHORS = ("config", "dev_local", "docs", "scripts", "src", "tests")
 PORTS_PER_MODULE = 4
@@ -230,6 +231,12 @@ def infer_chassis_name(channels_data: list[dict], default_chassis_name: str = DE
     return default_chassis_name
 
 
+def normalize_ai_engineering_unit(measurement_mode: str, engineering_unit: str | None) -> str:
+    if measurement_mode == "resistance":
+        return "ohm"
+    return (engineering_unit or "V").strip() or "V"
+
+
 def validate_app_config(config: AppConfig) -> AppConfig:
     if config.backend not in SUPPORTED_BACKENDS:
         raise ValueError(f"Unsupported backend: {config.backend}")
@@ -259,6 +266,11 @@ def validate_app_config(config: AppConfig) -> AppConfig:
             raise ValueError(f"AI channel {index} name must not be empty.")
         if not channel.physical_channel.strip():
             raise ValueError(f"AI channel {index} physical channel must not be empty.")
+        if channel.measurement_mode not in SUPPORTED_AI_MEASUREMENT_MODES:
+            raise ValueError(
+                f"AI channel {index} measurement mode must be one of: "
+                f"{', '.join(sorted(SUPPORTED_AI_MEASUREMENT_MODES))}."
+            )
         if not channel.engineering_unit.strip():
             raise ValueError(f"AI channel {index} engineering unit must not be empty.")
 
@@ -275,7 +287,7 @@ def validate_app_config(config: AppConfig) -> AppConfig:
     return config
 
 
-def _default_app_config(input_channel_count: int = 2, output_channel_count: int = 2) -> AppConfig:
+def _default_app_config(input_channel_count: int = 1, output_channel_count: int = 1) -> AppConfig:
     ai_channels = [
         AnalogInputChannelConfig(
             enabled=True,
@@ -285,9 +297,10 @@ def _default_app_config(input_channel_count: int = 2, output_channel_count: int 
                 (index % PORTS_PER_MODULE) + 1,
                 chassis_name=DEFAULT_CHASSIS_NAME,
             ),
+            measurement_mode="resistance",
             scale=1.0,
             offset=0.0,
-            engineering_unit="V",
+            engineering_unit="ohm",
             color=DEFAULT_COLORS[index % len(DEFAULT_COLORS)],
         )
         for index in range(input_channel_count)
@@ -324,8 +337,8 @@ def _default_app_config(input_channel_count: int = 2, output_channel_count: int 
 
 
 def default_app_config(
-    input_channel_count: int = 2,
-    output_channel_count: int = 2,
+    input_channel_count: int = 1,
+    output_channel_count: int = 1,
     *,
     channel_count: int | None = None,
 ) -> AppConfig:
@@ -354,9 +367,13 @@ def config_to_dict(config: AppConfig) -> dict:
                 "enabled": channel.enabled,
                 "name": channel.name,
                 "physical_channel": channel.physical_channel,
+                "measurement_mode": channel.measurement_mode,
                 "scale": channel.scale,
                 "offset": channel.offset,
-                "engineering_unit": channel.engineering_unit,
+                "engineering_unit": normalize_ai_engineering_unit(
+                    channel.measurement_mode,
+                    channel.engineering_unit,
+                ),
                 "color": channel.color,
                 "bridge_type": channel.bridge_type,
                 "excitation_voltage": channel.excitation_voltage,
@@ -383,6 +400,8 @@ def config_to_dict(config: AppConfig) -> dict:
 def load_config(path: str | Path) -> AppConfig:
     config_path = resolve_runtime_path(path)
     data = json.loads(config_path.read_text(encoding="utf-8"))
+    has_ai_channels = "ai_channels" in data or "channels" in data
+    has_ao_channels = "ao_channels" in data
     ai_channels_data = list(data.get("ai_channels", data.get("channels", [])))
     ao_channels_data = list(data.get("ao_channels", []))
     chassis_name = (
@@ -403,8 +422,10 @@ def load_config(path: str | Path) -> AppConfig:
         mode=str(sampling_data.get("mode", "continuous")),
     )
 
-    ai_channels = [
-        AnalogInputChannelConfig(
+    ai_channels = []
+    for index, item in enumerate(ai_channels_data):
+        measurement_mode = str(item.get("measurement_mode", "resistance"))
+        ai_channels.append(AnalogInputChannelConfig(
             enabled=bool(item.get("enabled", True)),
             name=str(item.get("name", f"AI {index + 1}")),
             physical_channel=str(
@@ -418,19 +439,21 @@ def load_config(path: str | Path) -> AppConfig:
                     ),
                 )
             ),
+            measurement_mode=measurement_mode,
             scale=float(item.get("scale", 1.0)),
             offset=float(item.get("offset", 0.0)),
-            engineering_unit=str(item.get("engineering_unit", "V")),
+            engineering_unit=normalize_ai_engineering_unit(
+                measurement_mode,
+                str(item.get("engineering_unit", "")),
+            ),
             color=str(item.get("color", DEFAULT_COLORS[index % len(DEFAULT_COLORS)])),
             bridge_type=str(item.get("bridge_type", "quarter_bridge")),
             excitation_voltage=float(item.get("excitation_voltage", 5.0)),
             nominal_resistance_ohm=float(item.get("nominal_resistance_ohm", 350.0)),
             zero_offset=float(item.get("zero_offset", 0.0)),
             calibration_scale=float(item.get("calibration_scale", 1.0)),
-        )
-        for index, item in enumerate(ai_channels_data)
-    ]
-    if not ai_channels:
+        ))
+    if not ai_channels and not has_ai_channels:
         ai_channels = default_app_config().ai_channels
 
     ao_channels = [
@@ -454,7 +477,7 @@ def load_config(path: str | Path) -> AppConfig:
         )
         for index, item in enumerate(ao_channels_data)
     ]
-    if not ao_channels:
+    if not ao_channels and not has_ao_channels:
         ao_channels = default_app_config().ao_channels
 
     return validate_app_config(

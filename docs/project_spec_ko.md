@@ -1,10 +1,12 @@
 ﻿# 저항 기반 센서 측정 GUI 프로그램 명세 및 진행 현황
 
-최종 갱신: 2026-04-20
+최종 갱신: 2026-04-25
 
 ## 1. 문서 목적
 
 이 문서는 현재 저장소에 구현된 `P_sensor` 애플리케이션의 범위, 구조, 구현 상태, 남은 과제를 정리한 현행 기준 문서다. 초기 요구사항 문서 역할뿐 아니라 실제 코드와 문서가 어긋나지 않도록 유지하는 기준 문서로 사용한다.
+
+현재 문서 기준 릴리스 단계는 `v0.4`다. `v0.4`는 실 장비 투입 전 프로그램 개발 완료 단계로 정의하며, 실제 장비 상시 운용 절차 고정과 운영 검증은 이 다음 단계에서 다룬다.
 
 ## 2. 프로젝트 개요
 
@@ -39,25 +41,40 @@
 - 기본 테스트 실행 환경
 - 자동화 레시피 로드와 백그라운드 실행
 - 변위 시작점/종료점/step 크기 기반 레시피 생성 헬퍼
+- 자동화 프로토콜 레시피 생성: `step_hold`, `hysteresis`, `speed_dependency`, `fatigue`
 - 자동화 세션 폴더, `session_manifest.json`, `step_summary.csv`, `measurement_XXXX.csv` 저장
 - `OPTOSIGMA SHOT-702` 기반 리니어 스테이지 설정과 SHOT 계열 명령 브리지
 - `OPTOSIGMA OSMS20-35` 변위 기준 `mm -> pulse` 환산 이동
+- 리니어 스테이지 시뮬레이션 컨트롤러와 `config/stage_simulated.example.json`
 - `SHOT 계열` 수동 점검 CLI와 PowerShell 실행 스크립트
 - 실장비 기준 SHOT 계열 연결, status 조회, 상대 이동, 방향키 jog, origin 복귀 검증
 - 자동화 step 결과와 `step_summary.csv`에 모션 위치(`position_before_mm`, `position_after_engage_mm`, `position_after_disengage_mm`) 기록
 - 자동화 안전 정책(`AutomationSafetyPolicy`) 기반 목표 변위와 실제 위치 소프트 리밋 검증
 - 자동화 smoke CLI와 `0.5 mm -> 측정 창 -> 0.0 mm` 실장비 오케스트레이션 검증
+- 시뮬레이션 DAQ + 시뮬레이션 리니어 스테이지 조합 smoke 검증
+- 메인 GUI 단일 Cockpit 레이아웃
+  - `Run`, `Motion`, `Protocol`, `Channels`
+  - 탭 전환 없는 상시 접근 구조
+  - `Log / Results` 동시 표시
+  - 자동화 결과 테이블과 protocol sequence preview 표시
 
 ### 3.2 부분 구현
 
 - NI 장비 사용 가능 여부 확인과 연결 오류 메시지는 구현되어 있으나, 장치 목록을 별도 패널에 시각화하는 기능은 아직 없다.
 - 채널별 상세 파라미터는 설정 파일에서 관리되며, GUI에서 편집 가능한 항목은 아직 제한적이다.
 - 16채널 확장 전제는 코드 구조상 열려 있으나, 현재 기본 예제와 테스트는 8채널 중심이다.
-- 자동화 UI는 `main_window.py` 안에 통합되어 있으며, 전용 패널 모듈 분리는 아직 진행 전이다.
-- 자동화 안전 계층은 기본 중단/타임아웃과 모션 설정 소프트 리밋 수준이다. 사용자 확인형 인터락과 복구 절차 표준화는 아직 없다.
+- 자동화 UI는 메인 Cockpit에 통합되어 있으며, Stage/Protocol/Safety 패널은 모듈로 분리되어 있다. Run/Channel 영역은 아직 `main_window.py`에 남아 있다.
+- 자동화 안전 계층은 목표 변위, 실제 위치 소프트 리밋, 원점 확인 인터락, recovery required 상태 표시까지 제공한다. 복구 절차의 상세 표준화는 추가 작업이다.
+- 최초 컨택점 자동인식은 `src/p_sensor/automation/contact.py` 기반으로 `ExperimentRunner`와 메인 Cockpit에 연결되어 있다.
+  - `Run` 패널에서 on/off와 핵심 파라미터를 설정할 수 있다.
+  - `Safety` 패널에서 contact detect 설정 상태, scanning 상태, 마지막 검출 결과를 확인할 수 있다.
+  - 실장비 기준 수동 검증과 세부 운영 절차 표준화는 추가 작업이다.
+- 자동화 진행률, 예상 남은 시간, 예상 종료 시각 계산은 `src/p_sensor/automation/progress.py`와 runner phase 이벤트를 통해 메인 Cockpit에 연결되어 있다.
 
 ### 3.3 미구현 또는 후순위
 
+- 최초 컨택점 자동인식의 실장비 수동 검증과 운영 절차 고정
+- 자동화 progress/ETA 계산의 실장비 시간 오차 보정
 - 클라우드 업로드
 - 데이터베이스 저장
 - 자동 리포트 생성
@@ -65,28 +82,63 @@
 - 장비 상태 대시보드
 - 알람 및 임계값 관리
 
-## 4. 현재 UI 동작 기준
+## 4. 현재 UI 동작 기준과 GUI 정책
 
-메인 화면은 세 영역으로 구성된다.
+메인 화면은 탭 전환 없이 모든 핵심 기능과 정보를 한 화면에서 접근하는 단일 Cockpit 구조를 기준으로 한다.
 
-- 상단 운영 바: 상태, 백엔드, 활성 채널 수, export 경로 요약, 연결/시작/일시정지/재개/정지 버튼
-- 좌측 스택: 세션 설정 패널, 로그 패널
-- 우측 스택: 모듈 카드 영역, 그래프 영역
+- 상단 운영 바
+  - 세션 상태
+  - backend 상태
+  - 활성 채널 수
+  - export 경로 요약
+  - 버전
+- 좌측 영역
+  - 실시간 센서 trend 그래프
+  - Live Monitor 카드
+  - `Log / Results` 동시 표시
+- 우측 Cockpit
+  - `Run`: DAQ 연결, logging, recipe/motion config, 자동화 실행/중단, mark 제어
+  - `Motion`: Stage 수동 조작, 위치/status 표시, Safety/interlock/recovery 상태
+  - `Protocol`: 자동화 프로토콜 생성 조건과 실행 sequence preview
+  - `Channels`: AI/AO 채널 설정 테이블
 
-세션 패널에서 현재 직접 조작 가능한 항목은 다음과 같다.
+현재 직접 조작 가능한 항목은 다음과 같다.
 
 - 백엔드 선택(`simulation`, `ni`)
-- 세션 라벨(`Session Label`)
+- 세션 라벨
 - CSV 저장 폴더 선택
-- 취득 주기(`Acquisition Hz`)
-- 표시 주기(`Display Hz`)
-- 모듈/포트별 활성화 토글
-- 자동화 레시피 로드(`Load Recipe`)
-- 자동화 레시피 생성 헬퍼(`Recipe Helper`)
-- 모션 설정 로드(`Load Motion`)
-- 자동화 실행/중단(`Run Automation`, `Stop Automation`)
-- 자동화 상태와 현재 step 표시
-- AO 없는 자동화 전용 프로필과 실행 진입점
+- 취득 주기와 표시 주기
+- AI/AO 슬롯과 채널별 활성화/plot 토글
+- 자동화 recipe 로드와 helper 생성
+- protocol recipe 생성: step-and-hold, hysteresis, speed dependency, fatigue
+- motion config 로드
+- Stage config 로드, 연결/해제, status, 상대/절대 이동, 원점/zero/hold/free/stop
+- Safety origin confirmation, software limit 요약, recovery 상태, emergency stop
+- 자동화 실행/중단
+- 자동화 step 결과 테이블과 log 확인
+
+GUI는 다음 정책을 우선한다.
+
+- 탭 전환 없이 핵심 기능과 정보를 동시에 볼 수 있어야 한다.
+- 스크롤은 사용하지 않거나 최소화한다. 화면을 벗어난 정보를 숨기는 방식보다 밀도와 배치를 먼저 조정한다.
+- 불필요한 여백은 정보 표출에 사용한다. 예: protocol sequence preview, result table, live status.
+- 패딩과 spacing은 최소화하되, 라벨 클리핑과 버튼 겹침은 허용하지 않는다.
+- `QGroupBox` 제목 영역은 글자가 씹히지 않을 만큼 확보한다.
+- 버튼은 텍스트를 읽을 수 있는 최소 크기로 줄이고, 긴 라벨은 축약한다.
+- 긴 경로는 화면에 전체 표시하지 않고 파일명만 표시하며 전체 경로는 tooltip에 둔다.
+- Live Monitor처럼 실제 정보량이 적은 영역은 과도한 stretch를 받지 않도록 하고, 남는 공간은 결과/로그/미리보기로 돌린다.
+- 고정 형식 UI 요소는 stable size를 가져야 하며, runtime 텍스트 변경으로 버튼/라벨이 겹치거나 레이아웃이 튀면 안 된다.
+- Stage/Protocol/Safety 같은 내부 패널은 중첩 카드/중첩 GroupBox를 줄이고, 상위 Cockpit 섹션만 명확한 경계를 갖는다.
+- 자동화 중에는 현재 step뿐 아니라 전체 진행률, 예상 남은 시간, 예상 종료 시각을 같은 Cockpit에서 볼 수 있어야 한다. 현재 구현은 runner phase 이벤트와 추정기를 연결해 이를 표시한다.
+
+현재 구현은 2026-04-25 기준으로 이전보다 고밀도화됐지만, 아직 목표 배치 밀도에 도달한 것으로 보지 않는다. 다음 UI 조정에서는 `DAQ Control`, `Live Monitor`, `Channels`, `Stage manual controls`의 불필요한 padding과 높이 buffer를 더 줄이고, 그로 확보한 공간을 `DAQ plot`과 `Stage plot`에 동일 비율로 재배분하는 방향을 유지한다. 기본 2채널 구성에서는 상위 workspace와 내부 섹션에서 불필요한 스크롤이 없어야 하고, 채널 확장 시에만 조건부 스크롤을 허용한다.
+
+현재 UI에 반영된 자동화 상태 정보는 다음과 같다.
+
+- 자동화 전체 진행률 표시줄
+- 예상 남은 시간과 예상 종료 시각 표시
+- 자동화 phase별 상태(`move`, `settle`, `measure`, `disengage`) 표시
+- 최초 컨택점 자동인식 설정 요약과 Safety 상태 표시
 
 파일 메뉴에서 다음 작업을 수행할 수 있다.
 
@@ -116,6 +168,11 @@
 
 현재 계산 로직은 채널별 `bridge_type`을 기준으로 동작한다.
 
+AI 채널은 `measurement_mode`로 표시/저장값 계산 방식을 분리한다.
+
+- `resistance`: 평균 전압을 브리지 식으로 저항값(`ohm`)으로 환산하고 상태 판정을 적용한다.
+- `voltage`: 평균 전압에 `scale`과 `offset`을 적용한 일반 전압/공학 단위 값을 사용한다.
+
 - `quarter_bridge`
 - `half_bridge`
 - `full_bridge`
@@ -126,6 +183,7 @@
 - `enabled`
 - `name`
 - `physical_channel`
+- `measurement_mode`
 - `bridge_type`
 - `excitation_voltage`
 - `nominal_resistance_ohm`
@@ -193,16 +251,26 @@
   자동화 오케스트레이션과 step 실행 상태 관리
 - `src/p_sensor/automation/safety.py`
   자동화 목표 변위와 실제 모션 위치 소프트 리밋 검증
+- `src/p_sensor/automation/contact.py`
+  저항 변화 기반 최초 컨택점 자동인식 준비 모듈
+- `src/p_sensor/automation/progress.py`
+  자동화 레시피 기반 진행률, 남은 시간, 예상 종료 시각 계산 모듈
 - `src/p_sensor/automation/smoke_cli.py`
   시뮬레이션 DAQ와 선택적 SHOT 계열 모션을 사용한 자동화 smoke 실행기
 - `src/p_sensor/automation/storage.py`
   자동화 세션 폴더, manifest, summary, 측정 CSV 저장
 - `src/p_sensor/motion/shot_series.py`
-  SHOT 계열 직렬 제어와 `OSMS20-35` 기준 명령 브리지
+  SHOT 계열 직렬 제어, 시뮬레이션 컨트롤러, `OSMS20-35` 기준 명령 브리지
 - `src/p_sensor/motion/shot_cli.py`
   `SHOT 계열` 실장비 status, jog, origin 점검용 CLI
 - `src/p_sensor/ui/main_window.py`
-  메인 GUI, 수동 측정, 자동화 패널, 로그, 설정 적용
+  메인 GUI, 단일 Cockpit, 수동 측정, 자동화 실행, 결과/로그, 설정 적용
+- `src/p_sensor/ui/compact_stage_panel.py`
+  Cockpit 내 Stage 수동 조작 패널
+- `src/p_sensor/ui/protocol_panel.py`
+  자동화 protocol recipe 생성과 sequence preview 패널
+- `src/p_sensor/ui/safety_panel.py`
+  Safety, interlock, recovery 상태 패널
 
 ## 10. 향후 자동화 확장 계획
 
@@ -217,7 +285,10 @@
 5. 세션 식별자, 세션별 폴더, 측정 창별 CSV 저장 구조를 자동화 기본 정책으로 둔다.
 6. 장비 어댑터는 SHOT 계열을 기준으로 구현하되, 상위 오케스트레이션은 장비 독립 인터페이스를 유지한다.
 7. 검증된 SHOT 계열 모션 모듈은 오케스트레이션에서 직접 직렬 명령을 노출하지 않고 명령 브리지 뒤에 둔다.
-8. 다음 개발 단계는 `move -> ready wait -> settle -> measurement window -> result save -> disengage/origin` 순서를 안전하게 실행하는 오케스트레이션 계층 정리다.
+8. 개발 환경에서는 시뮬레이션 DAQ와 시뮬레이션 리니어 스테이지를 기본 조합으로 사용해 실제 장비 없이도 UI와 자동화 흐름을 검증한다.
+9. 최초 컨택점 자동인식은 Stage 1(Z축)을 센서에서 충분히 위로 이격한 상태에서 시작하고, 저속 하강 중 저항 변화가 감지되는 최초 위치를 측정 시작 nominal contact point로 기록한다.
+10. 자동화 실행 상태는 현재 step뿐 아니라 전체 progress bar, 예상 남은 시간, 예상 종료 시각을 포함해야 한다.
+11. 다음 개발 단계는 `optional contact detect -> move -> ready wait -> settle -> measurement window -> result save -> disengage/origin` 순서를 안전하게 실행하는 오케스트레이션 계층 정리다.
 
 자세한 계획은 `docs/linear_stage_automation_plan_ko.md`를 기준 문서로 사용한다.
 
@@ -233,20 +304,23 @@
 우선순위가 높은 후속 작업은 다음과 같다.
 
 1. 사용자 확인형 인터락과 오류 복구 절차 표준화
-2. `move -> settle -> measure -> disengage/origin` 실행 흐름의 수동 하드웨어 체크리스트 문서화
-3. 실제 NI DAQ backend와 `ShotCommandBridge`를 조합한 전체 자동화 흐름 검증
-4. `main_window.py`에 집중된 자동화 UI를 패널 단위 모듈로 분리
-5. CSV 저장과 설정 직렬화에 대한 자동 테스트 확대
-6. NI 장비와 슬롯 정보를 화면에 표시하는 연결 진단 UI 추가
-7. 채널 상세 파라미터 편집 UI 추가
-8. 16채널 구성에서의 레이아웃 및 성능 검증
+2. 최초 컨택점 자동인식의 실장비 수동 검증과 recipe별 운영 기준 정리
+3. `optional contact detect -> move -> settle -> measure -> disengage/origin` 실행 흐름의 수동 하드웨어 체크리스트 문서화
+4. 자동화 progress bar, 예상 남은 시간, 예상 종료 시각의 실장비 기준 보정
+5. 실제 NI DAQ backend와 `ShotCommandBridge`를 조합한 전체 자동화 흐름 검증
+6. `main_window.py`에 집중된 자동화 UI를 패널 단위 모듈로 분리
+7. CSV 저장과 설정 직렬화에 대한 자동 테스트 확대
+8. NI 장비와 슬롯 정보를 화면에 표시하는 연결 진단 UI 추가
+9. 채널 상세 파라미터 편집 UI 추가
+10. 16채널 구성에서의 레이아웃 및 성능 검증
 
 ## 12. 실행 및 검증 명령
 
 ```powershell
 .\scripts\setup_env.ps1
 .\scripts\run_app.ps1
-.\scripts\run_automation_smoke.ps1 --session-label shot702_smoke_real
+.\scripts\run_automation_smoke.ps1 --session-label simulated_motion_smoke
+.\scripts\check_stage.ps1 --status
 .\.venv\Scripts\python.exe -m pytest
 ```
 

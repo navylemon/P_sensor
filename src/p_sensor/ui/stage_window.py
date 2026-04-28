@@ -41,6 +41,7 @@ from p_sensor.motion.shot_series import (
     MotionError,
     ShotController,
     ShotMotionConfig,
+    create_shot_controller,
     load_shot_motion_config,
 )
 
@@ -49,6 +50,7 @@ CONFIRMED_CONTROLLER_MODEL = "OPTOSIGMA SHOT-702"
 CONFIRMED_STAGE_MODEL = "OPTOSIGMA OSMS20-35"
 DEFAULT_STAGE_CONFIG_PATH = APP_ROOT / "dev_local" / "config" / "stage_shot702_osms20_35.local.json"
 FALLBACK_STAGE_CONFIG_PATH = APP_ROOT / "config" / "stage_shot702_osms20_35.example.json"
+SIMULATED_STAGE_CONFIG_PATH = APP_ROOT / "config" / "stage_simulated.example.json"
 MAX_STAGE_COUNT = 2
 
 
@@ -478,6 +480,7 @@ class StageControlPanel(QFrame):
 
 
 class StageWindow(QMainWindow):
+    MAX_LOG_BLOCKS = 2000
     operation_finished = Signal(str, bool, str, object, bool)
 
     def __init__(self, config_path: Path | None = None) -> None:
@@ -633,7 +636,7 @@ class StageWindow(QMainWindow):
         form = QFormLayout()
         form.setSpacing(5)
         self.port_edit = QLineEdit()
-        self.port_edit.setPlaceholderText("COM10")
+        self.port_edit.setPlaceholderText("COM7")
         self.stage_count_combo = QComboBox()
         self.stage_count_combo.addItem("Stage 1만 조작", (1,))
         self.stage_count_combo.addItem("Stage 2만 조작", (2,))
@@ -760,6 +763,7 @@ class StageWindow(QMainWindow):
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.log_edit.document().setMaximumBlockCount(self.MAX_LOG_BLOCKS)
         layout.addWidget(self.log_edit)
         return panel
 
@@ -1005,6 +1009,8 @@ class StageWindow(QMainWindow):
             return resolve_runtime_path(config_path)
         if DEFAULT_STAGE_CONFIG_PATH.exists():
             return DEFAULT_STAGE_CONFIG_PATH
+        if SIMULATED_STAGE_CONFIG_PATH.exists():
+            return SIMULATED_STAGE_CONFIG_PATH
         return FALLBACK_STAGE_CONFIG_PATH
 
     def _display_config_path(self, config_path: Path) -> str:
@@ -1154,7 +1160,7 @@ class StageWindow(QMainWindow):
 
         def connect() -> tuple[str, StageStatusSnapshot]:
             config = self._connected_config_from_ui()
-            controller = ShotController(config)
+            controller = create_shot_controller(config)
             with self._io_lock:
                 message = controller.connect()
                 for axis in axes:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import queue
+from collections import deque
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -35,11 +35,26 @@ class MeasurementBackend(ABC):
 
 class AcquisitionController:
     STOP_JOIN_TIMEOUT_S = 6.0
+    DEFAULT_FRAME_BUFFER_SECONDS = 5.0
+    MIN_FRAME_BUFFER = 256
+    MAX_FRAME_BUFFER = 10_000
 
-    def __init__(self, backend: MeasurementBackend, acquisition_hz: float) -> None:
+    def __init__(
+        self,
+        backend: MeasurementBackend,
+        acquisition_hz: float,
+        *,
+        frame_buffer_limit: int | None = None,
+    ) -> None:
         self.backend = backend
         self.acquisition_hz = max(1.0, acquisition_hz)
-        self.frames: queue.Queue[MeasurementFrame] = queue.Queue()
+        self.frame_buffer_limit = (
+            self._default_frame_buffer_limit()
+            if frame_buffer_limit is None
+            else max(1, int(frame_buffer_limit))
+        )
+        self.frames: deque[MeasurementFrame] = deque()
+        self._frames_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
         self._paused = threading.Event()
@@ -48,6 +63,7 @@ class AcquisitionController:
         self._paused_accumulated_s = 0.0
         self._failure: Exception | None = None
         self._failure_lock = threading.Lock()
+        self._dropped_frame_count = 0
 
     @property
     def is_running(self) -> bool:
@@ -67,6 +83,7 @@ class AcquisitionController:
 
         self._clear_failure()
         self._clear_pending_frames()
+        self._clear_dropped_frame_count()
         self._running.set()
         self._paused.clear()
         self._started_at = time.perf_counter()
@@ -98,13 +115,16 @@ class AcquisitionController:
         self.backend.disconnect()
 
     def drain_frames(self) -> list[MeasurementFrame]:
-        drained: list[MeasurementFrame] = []
-        while True:
-            try:
-                drained.append(self.frames.get_nowait())
-            except queue.Empty:
-                break
+        with self._frames_lock:
+            drained = list(self.frames)
+            self.frames.clear()
         return drained
+
+    def take_dropped_frame_count(self) -> int:
+        with self._frames_lock:
+            dropped_frame_count = self._dropped_frame_count
+            self._dropped_frame_count = 0
+        return dropped_frame_count
 
     def pop_failure(self) -> Exception | None:
         with self._failure_lock:
@@ -119,9 +139,24 @@ class AcquisitionController:
         with self._failure_lock:
             self._failure = None
 
+    def _clear_dropped_frame_count(self) -> None:
+        with self._frames_lock:
+            self._dropped_frame_count = 0
+
     def _set_failure(self, exc: Exception) -> None:
         with self._failure_lock:
             self._failure = exc
+
+    def _default_frame_buffer_limit(self) -> int:
+        calculated = int(round(self.acquisition_hz * self.DEFAULT_FRAME_BUFFER_SECONDS))
+        return max(self.MIN_FRAME_BUFFER, min(self.MAX_FRAME_BUFFER, calculated))
+
+    def _append_frame(self, frame: MeasurementFrame) -> None:
+        with self._frames_lock:
+            if len(self.frames) >= self.frame_buffer_limit:
+                self.frames.popleft()
+                self._dropped_frame_count += 1
+            self.frames.append(frame)
 
     def _run_loop(self) -> None:
         interval = 1.0 / self.acquisition_hz
@@ -136,7 +171,7 @@ class AcquisitionController:
                 elapsed_s -= self._paused_accumulated_s
                 frame = self.backend.read(elapsed_s)
                 frame.timestamp = datetime.now()
-                self.frames.put(frame)
+                self._append_frame(frame)
             except Exception as exc:
                 if self._running.is_set():
                     self._set_failure(exc)

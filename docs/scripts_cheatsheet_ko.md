@@ -1,6 +1,6 @@
 ﻿# scripts 폴더 치트시트
 
-최종 갱신: 2026-04-23
+최종 갱신: 2026-04-24
 
 이 문서는 저장소 루트의 `scripts/` 폴더에 있는 PowerShell 스크립트가 각각 무엇을 하는지 빠르게 확인하기 위한 요약이다.
 
@@ -8,7 +8,7 @@
 
 - 모든 명령은 저장소 루트에서 실행하는 것을 기준으로 한다.
 - 대부분의 실행 스크립트는 먼저 `.venv`를 찾는다. 없다면 `.\scripts\setup_env.ps1`를 먼저 실행한다.
-- `run_stage_app.ps1`, `check_stage.ps1`, `run_automation_smoke.ps1`는 실제 스테이지나 DAQ 하드웨어를 움직이거나 접근할 수 있으므로, 설정 파일과 COM 포트가 맞는지 먼저 확인한다.
+- `run_stage_app.ps1`는 실제 스테이지를 움직일 수 있다. `check_stage.ps1`, `run_automation_smoke.ps1`는 기본값이 시뮬레이션이지만, 실장비 설정을 명시하면 실제 스테이지나 DAQ 하드웨어를 움직이거나 접근할 수 있으므로 설정 파일과 COM 포트가 맞는지 먼저 확인한다.
 
 ## 한눈에 보기
 
@@ -50,12 +50,12 @@
 
 `run_automation_smoke.ps1`
 
-- 용도: 자동화 레시피 smoke 실행
-- 실행: `.\scripts\run_automation_smoke.ps1 --no-motion`
+- 용도: 자동화 레시피 smoke 실행. 기본 모션은 리니어 스테이지 시뮬레이션
+- 실행: `.\scripts\run_automation_smoke.ps1 --session-label smoke_sim`
 
 `check_stage.ps1`
 
-- 용도: SHOT-702/OSMS20-35 로컬 설정으로 스테이지 수동 점검
+- 용도: 리니어 스테이지 수동 점검. 기본 설정은 시뮬레이션
 - 실행: `.\scripts\check_stage.ps1 --status`
 
 ### 패키지 관리
@@ -199,6 +199,21 @@
 .\scripts\run_automation_app.ps1
 ```
 
+현재 GUI에서 함께 확인할 수 있는 항목:
+
+- `Run` 패널의 recipe load/helper/protocol
+- contact detect on/off와 핵심 파라미터
+- 전체 progress bar, 예상 남은 시간, 예상 종료 시각
+- `Safety` 패널의 origin/interlock/recovery/contact detect 상태
+
+권장 사용 순서:
+
+1. `Motion`에서 stage config를 확인한다.
+2. 실장비 자동화면 origin 상태를 먼저 점검한다.
+3. `Run`에서 recipe를 불러오거나 생성한다.
+4. 필요하면 `Contact` 설정을 켠다.
+5. `Run Auto`를 실행한다.
+
 ### `run_stage_app.ps1`
 
 SHOT-702 + OSMS20-35 스테이지 전용 GUI를 실행한다. 앱은 기본적으로 Windows 제목 표시줄과 종료 버튼이 보이는 최대화 창으로 열리며, Stage 1 또는 Stage 1+2 조작 패널을 한 화면에 표시한다.
@@ -246,13 +261,16 @@ p-sensor-stage
 
 - 앱/DAQ 설정: `config/channel_settings_automation.example.json`
 - 레시피: `config/experiment_recipe_smoke.example.json`
-- 모션 설정 후보: `dev_local/config/stage_shot702_osms20_35.local.json`
+- 모션 설정: `config/stage_simulated.example.json`
+
+기본 smoke recipe에는 contact detect metadata 예시가 포함되어 있다. 실제 실행 시 recipe의 contact detect 설정이 runner에 그대로 적용된다.
 
 대표 명령:
 
 ```powershell
 .\scripts\run_automation_smoke.ps1 --no-motion --session-label smoke_dry_run
-.\scripts\run_automation_smoke.ps1 --session-label shot702_smoke_real
+.\scripts\run_automation_smoke.ps1 --session-label smoke_simulated_motion
+.\scripts\run_automation_smoke.ps1 -MotionConfig dev_local\config\stage_shot702_osms20_35.local.json --session-label shot702_smoke_real
 ```
 
 주요 옵션:
@@ -271,7 +289,10 @@ p-sensor-stage
 
 주의:
 
-- `--no-motion`이 없으면 실제 SHOT 모션 설정을 찾고, 가능한 경우 스테이지 제어를 시도한다.
+- 기본값은 리니어 스테이지 시뮬레이션 설정을 사용한다.
+- 실장비 구동은 `-MotionConfig dev_local\config\stage_shot702_osms20_35.local.json`처럼 로컬 장비 설정을 명시한 경우에만 수행한다.
+- `--no-motion`은 위치 이동 자체를 생략하는 dry-run 경로이고, 기본 시뮬레이션은 위치/리밋/결과 기록까지 검증하는 개발 경로다.
+- contact detect가 켜진 recipe를 사용할 때는 `--no-motion` 대신 시뮬레이션 또는 실제 motion config를 유지해야 한다.
 - `--allow-ni`가 없으면 설정 파일이 `ni` backend를 요구해도 실제 NI DAQ 접근을 막는다.
 - 실행 결과는 세션 ID, 세션 폴더, summary 경로, step별 측정 파일 경로로 출력된다.
 
@@ -281,12 +302,12 @@ p-sensor-stage
 
 ### `check_stage.ps1`
 
-SHOT-702 + OSMS20-35 기준 로컬 설정으로 스테이지를 점검한다.
+리니어 스테이지 CLI를 통해 현재 위치, 이동, 원점, hold/free 동작을 점검한다. 기본 설정은 시뮬레이션이며, 실제 `SHOT-702` + `OSMS20-35` 점검은 로컬 장비 설정을 명시한다.
 
 기본 설정:
 
 ```text
-dev_local/config/stage_shot702_osms20_35.local.json
+config/stage_simulated.example.json
 ```
 
 대표 명령:
@@ -297,10 +318,13 @@ dev_local/config/stage_shot702_osms20_35.local.json
 .\scripts\check_stage.ps1 --axis 1 --hold --origin --origin-zero
 .\scripts\check_stage.ps1 --axis 1 --hold --goto-origin --status
 .\scripts\check_stage.ps1 --axis 1 --set-speed --calibrate-nominal
+.\scripts\check_stage.ps1 -Config dev_local\config\stage_shot702_osms20_35.local.json --axis 1 --status
 ```
 
 확정 운용 기준:
 
+- 기본 개발/GUI 점검은 시뮬레이션 설정으로 수행한다.
+- 실제 장비 점검은 `dev_local/config/stage_shot702_osms20_35.local.json` 같은 로컬 설정을 명시한다.
 - 별도 요청이 없으면 SHOT-702의 `axis 1`/driver 1만 움직인다.
 - SHOT-702 기계 원점복귀는 `H:1` 형식으로 수행한다.
 - `--goto-origin`은 logical origin, 즉 `0 mm` 절대 위치로 복귀한다.

@@ -81,6 +81,8 @@ class AutomationStepResult:
     frame_count: int
     average_inputs: dict[str, dict[str, float | str]]
     average_outputs: dict[str, float]
+    measurement_chunk_count: int = 0
+    measurement_files: tuple[str, ...] = ()
     status: str = "completed"
     notes: str = ""
 

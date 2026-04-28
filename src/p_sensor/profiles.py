@@ -23,8 +23,8 @@ IO_APP_PROFILE = AppProfile(
     window_title="P_sensor IO Console",
     config_path=DEFAULT_CONFIG_PATH,
     supports_analog_output=True,
-    default_input_channel_count=2,
-    default_output_channel_count=2,
+    default_input_channel_count=1,
+    default_output_channel_count=1,
 )
 
 
@@ -34,7 +34,7 @@ AI_MONITOR_PROFILE = AppProfile(
     window_title="P_sensor AI Monitor",
     config_path=APP_ROOT / "config" / "channel_settings_ai_only.example.json",
     supports_analog_output=False,
-    default_input_channel_count=2,
+    default_input_channel_count=1,
     default_output_channel_count=0,
 )
 
@@ -45,7 +45,7 @@ AUTOMATION_PROFILE = AppProfile(
     window_title="P_sensor Automation",
     config_path=APP_ROOT / "config" / "channel_settings_automation.example.json",
     supports_analog_output=False,
-    default_input_channel_count=2,
+    default_input_channel_count=1,
     default_output_channel_count=0,
 )
 

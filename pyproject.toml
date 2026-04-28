@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "p-sensor"
-version = "0.3.0"
+version = "0.4.0"
 description = "DAQ GUI application for NI cDAQ-9174 with NI 9234 input and NI 9265 output."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -12,6 +12,7 @@ dependencies = [
   "nidaqmx",
   "numpy",
   "pandas",
+  "PyOpenGL",
   "pyserial",
   "PySide6",
   "pyqtgraph",

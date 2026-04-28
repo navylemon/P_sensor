@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -77,11 +78,14 @@ class ShotMotionConfig:
     minimum_speed_pps: int = 50
     maximum_speed_pps: int = 5000
     acceleration_ms: int = 200
-    home_on_connect: bool = True
+    home_on_connect: bool = False
     motor_hold_on_connect: bool = True
     free_motor_on_disconnect: bool = False
+    simulated: bool = False
 
     def __post_init__(self) -> None:
+        if self.simulated and not self.port.strip():
+            self.port = "SIM"
         if not self.port.strip():
             raise ValueError(f"{self.controller_model} serial port must not be empty.")
         if self.axis not in {1, 2}:
@@ -129,6 +133,20 @@ def _max_supported_speed_pps(driver_mode: str, controller_model: str) -> int:
     return SHOT_MAX_SPEED_PPS
 
 
+def _is_simulated_mode(driver_mode: str, controller_model: str, port: str, simulated: bool) -> bool:
+    if simulated:
+        return True
+    normalized_driver = driver_mode.strip().lower()
+    normalized_port = port.strip().lower()
+    normalized_model = controller_model.strip().lower()
+    return (
+        normalized_driver in {"simulation", "simulated", "sim"}
+        or normalized_port in {"sim", "simulation", "simulated"}
+        or normalized_port.startswith("sim:")
+        or "simulated" in normalized_model
+    )
+
+
 def _load_bool(payload: dict, key: str, default: bool) -> bool:
     value = payload.get(key, default)
     if isinstance(value, bool):
@@ -173,9 +191,16 @@ def load_shot_motion_config(path: str | Path) -> ShotMotionConfig:
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     driver_mode = str(payload.get("driver_mode", "SHOT-702"))
     controller_model = str(payload.get("controller_model", "OPTOSIGMA SHOT-702"))
+    port = str(payload.get("port", "")).strip()
+    simulated = _load_bool(payload, "simulated", False) or _is_simulated_mode(
+        driver_mode,
+        controller_model,
+        port,
+        False,
+    )
     default_baudrate = _default_baudrate(driver_mode, controller_model)
     return ShotMotionConfig(
-        port=str(payload.get("port", "")).strip(),
+        port=port or ("SIM" if simulated else ""),
         axis=int(payload.get("axis", 1)),
         baudrate=int(payload.get("baudrate", default_baudrate)),
         rtscts=_load_bool(payload, "rtscts", True),
@@ -195,9 +220,19 @@ def load_shot_motion_config(path: str | Path) -> ShotMotionConfig:
         minimum_speed_pps=int(payload.get("minimum_speed_pps", 50)),
         maximum_speed_pps=int(payload.get("maximum_speed_pps", 5000)),
         acceleration_ms=int(payload.get("acceleration_ms", 200)),
-        home_on_connect=_load_bool(payload, "home_on_connect", True),
+        home_on_connect=_load_bool(payload, "home_on_connect", False),
         motor_hold_on_connect=_load_bool(payload, "motor_hold_on_connect", True),
         free_motor_on_disconnect=_load_bool(payload, "free_motor_on_disconnect", False),
+        simulated=simulated,
+    )
+
+
+def is_simulated_motion_config(config: ShotMotionConfig) -> bool:
+    return _is_simulated_mode(
+        config.driver_mode,
+        config.controller_model,
+        config.port,
+        config.simulated,
     )
 
 
@@ -451,21 +486,142 @@ class ShotController:
         )
 
 
+class SimulatedShotController(ShotController):
+    def __init__(self, config: ShotMotionConfig) -> None:
+        super().__init__(config, transport=None)
+        self._connected = False
+        self._positions: dict[int, int] = {
+            1: self.mm_to_pulses(config.min_position_mm),
+            2: self.mm_to_pulses(config.min_position_mm),
+        }
+        self._motor_hold: dict[int, bool] = {1: False, 2: False}
+        self._speed_by_axis: dict[int, tuple[int, int, int]] = {
+            config.axis: (config.minimum_speed_pps, config.maximum_speed_pps, config.acceleration_ms)
+        }
+
+    def connect(self) -> str:
+        self._connected = True
+        if self.config.set_speed_on_connect:
+            self.set_speed(
+                axis=self.config.axis,
+                minimum_speed_pps=self.config.minimum_speed_pps,
+                maximum_speed_pps=self.config.maximum_speed_pps,
+                acceleration_ms=self.config.acceleration_ms,
+            )
+        if self.config.motor_hold_on_connect:
+            self.set_motor_hold(axis=self.config.axis, hold=True)
+        if self.config.home_on_connect:
+            self.home(axis=self.config.axis, direction=self.config.home_direction)
+            self.wait_until_ready(timeout_s=self.config.ready_timeout_s)
+        model = self.config.controller_model
+        display_model = model if "simulated" in model.lower() else f"Simulated {model}"
+        return (
+            f"{display_model} ready on {self.config.port} "
+            f"(axis={self.config.axis}, stage={self.config.stage_model})"
+        )
+
+    def disconnect(self) -> None:
+        if self.config.free_motor_on_disconnect:
+            self.set_motor_hold(axis=self.config.axis, hold=False)
+        self._connected = False
+
+    def get_rom_version(self) -> str:
+        return "SIM-1.0"
+
+    def get_status(self) -> ShotStatus:
+        return ShotStatus(
+            axis1_position=self._positions[1],
+            axis2_position=self._positions[2],
+            command_ack="K",
+            stop_ack="K",
+            ready_ack="R",
+        )
+
+    def is_ready(self) -> bool:
+        return True
+
+    def wait_until_ready(self, timeout_s: float | None = None) -> None:
+        return None
+
+    def home(self, *, axis: int, direction: str | None = None) -> None:
+        self._validate_axis(axis)
+        home_direction = self.config.home_direction if direction is None else direction
+        self._validate_direction(home_direction)
+        home_position = self.config.min_position_mm if home_direction == "-" else self.config.max_position_mm
+        self._positions[axis] = self.mm_to_pulses(home_position)
+
+    def origin(self, *, axis: int, direction: str | None = None, reset_logical_zero: bool = False) -> None:
+        self.home(axis=axis, direction=direction)
+        if reset_logical_zero:
+            self.reset_logical_zero(axis=axis)
+
+    def move_absolute_pulses(self, *, axis: int, position_pulses: int) -> None:
+        self._validate_axis(axis)
+        self._validate_absolute_pulses(position_pulses)
+        self._positions[axis] = int(position_pulses)
+
+    def move_relative_pulses(self, *, axis: int, delta_pulses: int) -> None:
+        self._validate_axis(axis)
+        self._validate_relative_pulses(axis=axis, delta_pulses=delta_pulses)
+        self._positions[axis] += int(delta_pulses)
+
+    def set_speed(self, *, axis: int, minimum_speed_pps: int, maximum_speed_pps: int, acceleration_ms: int) -> None:
+        self._validate_axis(axis)
+        self._validate_speed(
+            minimum_speed_pps=minimum_speed_pps,
+            maximum_speed_pps=maximum_speed_pps,
+            acceleration_ms=acceleration_ms,
+        )
+        self._speed_by_axis[axis] = (int(minimum_speed_pps), int(maximum_speed_pps), int(acceleration_ms))
+
+    def set_motor_hold(self, *, axis: int, hold: bool) -> None:
+        self._validate_axis(axis)
+        self._motor_hold[axis] = hold
+
+    def slow_stop(self, *, axis: int) -> None:
+        self._validate_axis(axis)
+
+    def emergency_stop(self) -> None:
+        return None
+
+    def reset_logical_zero(self, *, axis: int) -> None:
+        self._validate_axis(axis)
+        self._positions[axis] = 0
+
+    def get_axis_position_pulses(self, axis: int) -> int:
+        self._validate_axis(axis)
+        return self._positions[axis]
+
+    def _require_transport(self) -> SerialTransport:
+        raise MotionError("Simulated controller does not use a serial transport.")
+
+
+def create_shot_controller(config: ShotMotionConfig) -> ShotController:
+    if is_simulated_motion_config(config):
+        return SimulatedShotController(config)
+    return ShotController(config)
+
+
 class ShotCommandBridge(CommandBridge):
-    def __init__(self, controller: ShotController) -> None:
+    def __init__(self, controller: ShotController, *, disconnect_on_close: bool = True) -> None:
         self.controller = controller
         self.config = controller.config
+        self.disconnect_on_close = disconnect_on_close
 
     def connect(self) -> str:
         return self.controller.connect()
 
     def disconnect(self) -> None:
-        self.controller.disconnect()
+        if self.disconnect_on_close:
+            self.controller.disconnect()
 
     def set_velocity_mm_min(self, velocity_mm_min: float | None) -> None:
         if velocity_mm_min is None:
             return
         self.controller.set_velocity_mm_min(axis=self.config.axis, velocity_mm_min=velocity_mm_min)
+
+    def move_relative_mm(self, *, axis: int, delta_mm: float) -> None:
+        self.controller.move_relative_mm(axis=axis, delta_mm=delta_mm)
 
     def engage(self, step: AutomationStep) -> None:
         target_pulses = self._displacement_to_pulses(step.target_displacement or 0.0)
@@ -475,8 +631,27 @@ class ShotCommandBridge(CommandBridge):
         target_pulses = self._displacement_to_pulses(self.config.disengage_position_mm)
         self.controller.move_absolute_pulses(axis=self.config.axis, position_pulses=target_pulses)
 
-    def wait_until_ready(self, timeout_s: float | None = None) -> None:
-        self.controller.wait_until_ready(timeout_s=timeout_s)
+    def wait_until_ready(
+        self,
+        timeout_s: float | None = None,
+        position_callback: Callable[[float | None], None] | None = None,
+    ) -> None:
+        if position_callback is None:
+            self.controller.wait_until_ready(timeout_s=timeout_s)
+            return
+        timeout = self.config.ready_timeout_s if timeout_s is None else timeout_s
+        deadline = time.monotonic() + timeout
+        next_position_emit_at = 0.0
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_position_emit_at:
+                position_callback(self.get_position_mm())
+                next_position_emit_at = now + 0.2
+            if self.controller.is_ready():
+                position_callback(self.get_position_mm())
+                return
+            time.sleep(self.config.ready_poll_interval_s)
+        raise TimeoutError(f"{self.config.controller_model} did not become ready within {timeout:.2f}s.")
 
     def get_position_mm(self) -> float | None:
         return self.controller.get_axis_position_mm(self.config.axis)
@@ -485,7 +660,11 @@ class ShotCommandBridge(CommandBridge):
         try:
             self.controller.emergency_stop()
         finally:
-            self.controller.disconnect()
+            if self.disconnect_on_close:
+                self.controller.disconnect()
+
+    def reset_logical_zero(self) -> None:
+        self.controller.reset_logical_zero(axis=self.config.axis)
 
     def _displacement_to_pulses(self, displacement_mm: float) -> int:
         return int(round(displacement_mm * self.config.pulses_per_mm))

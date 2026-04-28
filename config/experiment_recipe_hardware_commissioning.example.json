@@ -1,0 +1,24 @@
+{
+  "recipe_id": "hardware_commissioning_micro_move",
+  "metadata": {
+    "description": "Conservative first hardware commissioning recipe. Contact detection is intentionally disabled.",
+    "enable_contact_detection": false,
+    "contact_detection": {
+      "enable_contact_detection": false
+    },
+    "safety_note": "Use only after DAQ and stage status checks pass, with the probe clear of the sample."
+  },
+  "steps": [
+    {
+      "step_id": "commissioning_001",
+      "target_displacement": 0.05,
+      "velocity_mm_min": 0.5,
+      "settle_time_s": 0.2,
+      "measure_frame_count": 3,
+      "disengage_after_measure": true,
+      "post_disengage_wait_s": 0.2,
+      "ready_timeout_s": 10.0,
+      "notes": "Move selected stage axis to 0.05 mm, collect a short measurement window, then return to 0.0 mm."
+    }
+  ]
+}

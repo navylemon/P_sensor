@@ -1,6 +1,6 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [string]$Config = "dev_local/config/stage_shot702_osms20_35.local.json",
+    [string]$Config = "config/stage_simulated.example.json",
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$StageArgs
 )

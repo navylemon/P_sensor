@@ -2,7 +2,7 @@
 param(
     [string]$Config = "config/channel_settings_automation.example.json",
     [string]$Recipe = "config/experiment_recipe_smoke.example.json",
-    [string]$MotionConfig = "dev_local/config/stage_shot702_osms20_35.local.json",
+    [string]$MotionConfig = "config/stage_simulated.example.json",
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$SmokeArgs
 )

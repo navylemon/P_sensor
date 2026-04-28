@@ -1,32 +1,29 @@
 # P_sensor
 
-`NI cDAQ-9174 + NI 9234 + NI 9265` 조합용 데스크톱 측정/출력 GUI다.
+`NI cDAQ-9174 + NI 9234 + NI 9265` 기반 센서 측정/자동화 GUI 프로젝트다.
 
-현재 프로그램은 기본적으로 다음 구성을 사용한다.
+현재 저장소는 수동 측정, AO 출력, 자동화 레시피 실행, `OPTOSIGMA SHOT-702 + OSMS20-35` 리니어 스테이지 연동까지 포함한 `v0.4` 기준 현행 개발 버전을 유지한다. `v0.4`는 실 장비 투입 전 프로그램 개발 완료 단계를 뜻한다. 이전 루트 프로그램은 `P_sensor_v0.2_archive_20260414/`에 보관되어 있다.
 
-- AI 2채널: `NI 9234`
-- AO 2채널: `NI 9265`
-- 백엔드: `simulation`, `ni`
-- 저장 형식: 세션별 폴더 + CSV
+## 주요 기능
 
-기존 루트 프로그램은 `P_sensor_v0.2_archive_20260414/`에 아카이브했다.
+- `simulation`, `ni` backend 지원
+- `NI 9234` 입력과 `NI 9265` 출력 동시 사용
+- 실시간 센서 trend, live monitor, CSV 저장
+- 자동화 레시피 로드/실행/중단
+- `Recipe Helper`, `Protocol` 기반 recipe 생성
+- 자동화 진행률, 예상 남은 시간, 예상 종료 시각, phase 표시
+- SHOT 계열 stage config 로드, 수동 이동, origin/zero/hold/free/stop
+- 자동화 safety 정책, origin 확인, recovery 상태 표시
+- 최초 contact detect 실행
+  - `Run` 패널에서 on/off와 핵심 파라미터 설정
+  - `Safety` 패널에서 설정 상태, scanning 상태, 마지막 검출 결과 표시
+  - recipe metadata와 UI 설정 모두 지원
+- 자동화 결과 저장
+  - `session_manifest.json`
+  - `step_summary.csv`
+  - `measurement_XXXX.csv`
 
-## 현재 기능
-
-- `simulation` 백엔드로 GUI와 저장 흐름을 먼저 검증 가능
-- `ni` 백엔드에서 `9234` 입력과 `9265` 출력 동시 사용
-- `9234` 입력값을 표시 주기에 맞게 평균화해서 표시
-- `9265` 출력 전류를 채널별 setpoint로 적용
-- 입력 추세 그래프 표시
-- 수동 측정 시 세션 라벨 입력과 세션별 `measurement.csv` 저장
-- 자동화 레시피 로드와 `Run Automation`/`Stop Automation` 실행
-- 변위 스윕 기반 자동화 레시피 생성용 `Recipe Helper`
-- `OPTOSIGMA OSMS20-35` + `OPTOSIGMA SHOT-702` 기준 모션 설정 로드
-- SHOT 계열 수동 점검 CLI: status, 상대 이동, 방향키 jog, origin 복귀
-- 자동화 세션별 `session_manifest.json`, `step_summary.csv`, `measurement_XXXX.csv` 저장
-- JSON 설정 파일 저장/불러오기
-
-## 실행
+## 빠른 시작
 
 ```powershell
 .\scripts\setup_env.ps1
@@ -41,7 +38,7 @@
 .\.venv\Scripts\python.exe -m p_sensor --profile automation
 ```
 
-패키지 진입점은 다음으로 정리한다.
+엔트리포인트:
 
 - `python -m p_sensor --profile io`
 - `python -m p_sensor --profile ai`
@@ -53,7 +50,46 @@
 - `p-sensor-stage`
 - `p-sensor-shot`
 
-스테이지 실장비 점검:
+## 자동화 사용 순서
+
+GUI 기준 권장 순서:
+
+1. `.\scripts\run_automation_app.ps1`로 automation 프로파일 GUI를 연다.
+2. `Motion`에서 stage config를 확인하거나 로드한다.
+3. 실장비 자동화면 `Safety`에서 origin 상태를 확인한다.
+4. `Run`에서 recipe를 로드하거나 `Protocol`, `Recipe Helper`로 생성한다.
+5. 필요하면 `Run`의 `Contact` 설정을 켠다.
+   - axis
+   - contact channel
+   - scan speed / step / max travel
+   - resistance threshold
+   - baseline / stable duration
+   - `Use0`
+6. `Run Auto`를 실행한다.
+7. 진행률, ETA, phase, `Safety`의 contact detect 상태를 확인한다.
+
+주의:
+
+- contact detect를 켠 상태에서 motion config가 없으면 `Run Auto`는 비활성화된다.
+- 실장비에서는 stage 경로, origin, emergency stop 접근 가능 여부를 먼저 확인해야 한다.
+
+## 자동화 smoke
+
+```powershell
+.\scripts\run_automation_smoke.ps1 --no-motion --session-label smoke_dry_run
+.\scripts\run_automation_smoke.ps1 --session-label smoke_simulated_motion
+.\scripts\run_automation_smoke.ps1 -MotionConfig dev_local\config\stage_shot702_osms20_35.local.json --session-label shot702_smoke_real
+```
+
+기본값:
+
+- config: `config/channel_settings_automation.example.json`
+- recipe: `config/experiment_recipe_smoke.example.json`
+- motion: `config/stage_simulated.example.json`
+
+`config/experiment_recipe_smoke.example.json`에는 contact detect preset 예시가 포함되어 있다.
+
+## stage 점검
 
 ```powershell
 .\scripts\check_stage.ps1 --status
@@ -61,22 +97,22 @@
 .\scripts\check_stage.ps1 --hold-on-connect --origin --origin-zero
 ```
 
-자동화 smoke 검증:
-
-```powershell
-.\scripts\run_automation_smoke.ps1 --no-motion --session-label smoke_dry_run
-.\scripts\run_automation_smoke.ps1 --session-label shot702_smoke_real
-```
-
-## 기본 설정 파일
+## 기본 예제 파일
 
 - `config/channel_settings.example.json`
+- `config/channel_settings_automation.example.json`
 - `config/experiment_recipe.example.json`
 - `config/experiment_recipe_smoke.example.json`
+- `config/protocol_step_hold.example.json`
+- `config/protocol_hysteresis.example.json`
+- `config/protocol_speed_dependency.example.json`
+- `config/protocol_fatigue.example.json`
 - `config/stage_shot702_osms20_35.example.json`
-- `config/channel_settings_automation.example.json`
+- `config/stage_simulated.example.json`
 
-기본 예시는 아래를 전제로 한다.
+protocol/experiment recipe 예제에는 `contact_detection` metadata 구조가 포함되어 있다.
+
+## 기본 장비 예시
 
 - `cDAQ1`
 - `NI 9234` at slot 1
@@ -86,8 +122,14 @@
 
 ## 주의
 
-- `ni` 백엔드를 쓰려면 `nidaqmx`와 NI 드라이버가 설치되어 있어야 한다.
-- SHOT 계열 스테이지 제어를 쓰려면 `pyserial`과 올바른 `RS-232C` 설정이 필요하다.
-- `NI 9234`는 저속 단발 샘플링 장비가 아니라 내부적으로 최소 샘플링 속도 제한을 고려한다.
+- `ni` backend를 사용하려면 `nidaqmx`와 NI 드라이버가 설치되어 있어야 한다.
+- SHOT 계열 stage 제어를 사용하려면 `pyserial`과 올바른 `RS-232C` 설정이 필요하다.
+- `NI 9234`는 저속 정적 신호 전용 장비가 아니므로 내부적으로 최소 샘플링 제약을 고려한다.
 - `NI 9265` 출력은 mA 기준으로 다룬다.
-- 실제 장비별 `COM` 포트, `pulses_per_mm`, 홈 방향 같은 값은 `dev_local/config/`에서 관리하는 편이 적절하다.
+- 실제 장비용 `COM` 포트, `pulses_per_mm`, 방향값 등은 `dev_local/config/`에서 관리하는 것을 권장한다.
+
+## 참고 문서
+
+- `docs/project_spec_ko.md`
+- `docs/linear_stage_automation_plan_ko.md`
+- `docs/scripts_cheatsheet_ko.md`

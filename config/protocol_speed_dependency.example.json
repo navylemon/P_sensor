@@ -2,7 +2,29 @@
   "recipe_id": "speed_dependency",
   "protocol_type": "speed_dependency",
   "metadata": {
-    "description": "Run identical displacement sweeps at multiple velocities for strain-rate dependency analysis."
+    "description": "Run identical displacement sweeps at multiple velocities for strain-rate dependency analysis.",
+    "enable_contact_detection": false,
+    "contact_stage_axis": 1,
+    "contact_channel_index": 0,
+    "contact_scan_speed_mm_s": 0.02,
+    "contact_scan_step_mm": 0.01,
+    "contact_max_travel_mm": 1.0,
+    "contact_delta_resistance_threshold_ohm": 1.0,
+    "contact_baseline_duration_s": 0.2,
+    "contact_stable_duration_s": 0.05,
+    "contact_use_as_zero": true,
+    "contact_detection": {
+      "enable_contact_detection": false,
+      "contact_stage_axis": 1,
+      "contact_channel_index": 0,
+      "contact_scan_speed_mm_s": 0.02,
+      "contact_scan_step_mm": 0.01,
+      "contact_max_travel_mm": 1.0,
+      "contact_delta_resistance_threshold_ohm": 1.0,
+      "contact_baseline_duration_s": 0.2,
+      "contact_stable_duration_s": 0.05,
+      "contact_use_as_zero": true
+    }
   },
   "min_displacement_mm": 0.0,
   "max_displacement_mm": 1.0,

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from p_sensor.models import ChannelConfig
+from p_sensor.models import AnalogInputChannelConfig, AnalogInputReading
 
 
-def resistance_to_voltage(resistance_ohm: float, channel: ChannelConfig) -> float:
+def resistance_to_voltage(resistance_ohm: float, channel: AnalogInputChannelConfig) -> float:
     excitation = max(channel.excitation_voltage, 1e-9)
     nominal = max(channel.nominal_resistance_ohm, 1e-9)
-    bridge_reference = max(channel.bridge_reference_resistance_ohm, 1e-9)
+    bridge_reference = nominal
     adjusted = ((resistance_ohm - channel.zero_offset) - nominal) / max(channel.calibration_scale, 1e-9)
     raw_resistance = nominal + adjusted
 
@@ -22,10 +22,10 @@ def resistance_to_voltage(resistance_ohm: float, channel: ChannelConfig) -> floa
     return excitation * (adjusted / (4.0 * nominal))
 
 
-def voltage_to_resistance(voltage: float, channel: ChannelConfig) -> float:
+def voltage_to_resistance(voltage: float, channel: AnalogInputChannelConfig) -> float:
     excitation = max(channel.excitation_voltage, 1e-9)
     nominal = max(channel.nominal_resistance_ohm, 1e-9)
-    bridge_reference = max(channel.bridge_reference_resistance_ohm, 1e-9)
+    bridge_reference = nominal
     ratio = voltage / excitation
 
     if channel.bridge_type == "quarter_bridge":
@@ -42,7 +42,7 @@ def voltage_to_resistance(voltage: float, channel: ChannelConfig) -> float:
     return nominal + (delta * channel.calibration_scale) + channel.zero_offset
 
 
-def reading_status(resistance_ohm: float, channel: ChannelConfig) -> str:
+def reading_status(resistance_ohm: float, channel: AnalogInputChannelConfig) -> str:
     delta = abs(resistance_ohm - channel.nominal_resistance_ohm - channel.zero_offset)
 
     if delta > 4.5:
@@ -50,3 +50,32 @@ def reading_status(resistance_ohm: float, channel: ChannelConfig) -> str:
     if delta > 3.0:
         return "warning"
     return "normal"
+
+
+def scale_voltage(voltage: float, channel: AnalogInputChannelConfig) -> float:
+    return (voltage * channel.scale) + channel.offset
+
+
+def compute_input_reading(
+    *,
+    channel_index: int,
+    channel: AnalogInputChannelConfig,
+    voltage: float,
+) -> AnalogInputReading:
+    if channel.measurement_mode == "voltage":
+        scaled_value = scale_voltage(voltage, channel)
+        unit = channel.engineering_unit.strip() or "V"
+        status = "ok" if abs(voltage) < 4.9 else "limit"
+    else:
+        scaled_value = voltage_to_resistance(voltage, channel)
+        unit = "ohm"
+        status = reading_status(scaled_value, channel)
+
+    return AnalogInputReading(
+        channel_index=channel_index,
+        channel_name=channel.name,
+        voltage=voltage,
+        scaled_value=scaled_value,
+        unit=unit,
+        status=status,
+    )

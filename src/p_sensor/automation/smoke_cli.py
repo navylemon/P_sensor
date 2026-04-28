@@ -12,13 +12,14 @@ from p_sensor.automation.runner import ExperimentRunner, NoOpCommandBridge
 from p_sensor.automation.safety import AutomationSafetyPolicy
 from p_sensor.config import APP_ROOT, load_config, resolve_runtime_path
 from p_sensor.models import AppConfig
-from p_sensor.motion import ShotCommandBridge, ShotController, load_shot_motion_config
+from p_sensor.motion import ShotCommandBridge, create_shot_controller, load_shot_motion_config
 from p_sensor.services import MeasurementService
 
 
 DEFAULT_APP_CONFIG = "config/channel_settings_automation.example.json"
 DEFAULT_RECIPE = "config/experiment_recipe_smoke.example.json"
 DEFAULT_LOCAL_MOTION_CONFIG = "dev_local/config/stage_shot702_osms20_35.local.json"
+DEFAULT_SIMULATED_MOTION_CONFIG = "config/stage_simulated.example.json"
 DEFAULT_EXAMPLE_MOTION_CONFIG = "config/stage_shot702_osms20_35.example.json"
 
 
@@ -43,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 def default_motion_config_path() -> Path:
     for candidate in (
         DEFAULT_LOCAL_MOTION_CONFIG,
+        DEFAULT_SIMULATED_MOTION_CONFIG,
         DEFAULT_EXAMPLE_MOTION_CONFIG,
     ):
         path = resolve_runtime_path(candidate)
@@ -78,7 +80,16 @@ def make_motion_bridge(args: argparse.Namespace):
         max_position_mm=motion_config.max_position_mm if motion_config.enforce_software_limits else None,
         require_target_displacement=True,
     )
-    return ShotCommandBridge(ShotController(motion_config)), safety_policy
+    return ShotCommandBridge(create_shot_controller(motion_config)), safety_policy
+
+
+def recipe_uses_contact_detection(recipe) -> bool:
+    metadata = recipe.metadata if isinstance(recipe.metadata, dict) else {}
+    payload = dict(metadata)
+    nested = metadata.get("contact_detection")
+    if isinstance(nested, dict):
+        payload.update(nested)
+    return bool(payload.get("enable_contact_detection"))
 
 
 def run_smoke(argv: Sequence[str] | None = None) -> int:
@@ -93,6 +104,8 @@ def run_smoke(argv: Sequence[str] | None = None) -> int:
     if not args.include_ao:
         config = replace(config, ao_channels=[])
     recipe = load_recipe(args.recipe)
+    if args.no_motion and recipe_uses_contact_detection(recipe):
+        raise RuntimeError("Contact detection enabled recipe cannot be combined with --no-motion.")
     backend = make_backend(config, allow_ni=args.allow_ni)
     measurement_service = MeasurementService(backend, config.sampling.acquisition_hz)
     command_bridge, safety_policy = make_motion_bridge(args)

@@ -17,9 +17,10 @@ class AnalogInputChannelConfig:
     enabled: bool
     name: str
     physical_channel: str
+    measurement_mode: str = "resistance"
     scale: float = 1.0
     offset: float = 0.0
-    engineering_unit: str = "V"
+    engineering_unit: str = "ohm"
     color: str = "#3A7CA5"
     bridge_type: str = "quarter_bridge"
     excitation_voltage: float = 5.0

@@ -70,7 +70,7 @@ def run_application(profile: AppProfile = IO_APP_PROFILE, *, config_path: Path |
         return 1
 
     window = MainWindow(config=config, config_path=resolved_config_path, profile=profile)
-    window.show()
+    window.showMaximized()
     return app.exec()
 
 

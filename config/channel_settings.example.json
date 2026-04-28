@@ -14,19 +14,16 @@
       "enabled": true,
       "name": "AI 1",
       "physical_channel": "cDAQ1Mod1/ai0",
+      "measurement_mode": "resistance",
       "scale": 1.0,
       "offset": 0.0,
-      "engineering_unit": "V",
+      "engineering_unit": "ohm",
+      "bridge_type": "quarter_bridge",
+      "excitation_voltage": 5.0,
+      "nominal_resistance_ohm": 350.0,
+      "zero_offset": 0.0,
+      "calibration_scale": 1.0,
       "color": "#3A7CA5"
-    },
-    {
-      "enabled": true,
-      "name": "AI 2",
-      "physical_channel": "cDAQ1Mod1/ai1",
-      "scale": 1.0,
-      "offset": 0.0,
-      "engineering_unit": "V",
-      "color": "#E63946"
     }
   ],
   "ao_channels": [
@@ -34,14 +31,6 @@
       "enabled": true,
       "name": "AO 1",
       "physical_channel": "cDAQ1Mod2/ao0",
-      "min_current_ma": 0.0,
-      "max_current_ma": 20.0,
-      "initial_current_ma": 0.0
-    },
-    {
-      "enabled": true,
-      "name": "AO 2",
-      "physical_channel": "cDAQ1Mod2/ao1",
       "min_current_ma": 0.0,
       "max_current_ma": 20.0,
       "initial_current_ma": 0.0

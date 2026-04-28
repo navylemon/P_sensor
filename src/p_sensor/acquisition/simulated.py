@@ -5,6 +5,7 @@ import random
 from datetime import datetime
 
 from p_sensor.acquisition.base import BackendError, MeasurementBackend
+from p_sensor.calculations import compute_input_reading, resistance_to_voltage
 from p_sensor.models import AnalogInputReading, AnalogOutputState, MeasurementFrame
 
 
@@ -48,21 +49,21 @@ class SimulatedBackend(MeasurementBackend):
             if not channel.enabled:
                 continue
 
-            harmonic = math.sin(elapsed_s * 0.9 + index * 0.45) * 0.8
-            drift = math.sin(elapsed_s * 0.11 + index) * 0.15
-            coupling = average_output_ma * 0.025
-            noise = random.uniform(-0.015, 0.015)
-            voltage = harmonic + drift + coupling + noise
-            scaled_value = (voltage * channel.scale) + channel.offset
+            harmonic = math.sin(elapsed_s * 0.9 + index * 0.45)
+            drift = math.sin(elapsed_s * 0.11 + index) * 0.2
+            coupling = average_output_ma * 0.08
+            noise = random.uniform(-0.03, 0.03)
+            if channel.measurement_mode == "voltage":
+                voltage = (harmonic * 0.8) + (drift * 0.15) + (average_output_ma * 0.025) + (noise * 0.5)
+            else:
+                resistance = channel.nominal_resistance_ohm + harmonic + drift + coupling + noise
+                voltage = resistance_to_voltage(resistance, channel)
 
             inputs.append(
-                AnalogInputReading(
+                compute_input_reading(
                     channel_index=index,
-                    channel_name=channel.name,
+                    channel=channel,
                     voltage=voltage,
-                    scaled_value=scaled_value,
-                    unit=channel.engineering_unit,
-                    status="ok" if abs(voltage) < 4.9 else "limit",
                 )
             )
 
