@@ -91,6 +91,8 @@ class CompactStagePanel(QWidget):
         self.position_label = QLabel("-- mm")
         self.step_spin = self._new_spin(0.001, 10.0, 3, 0.1, 0.1)
         self.target_spin = self._new_spin(-1000.0, 1000.0, 3, 0.0, 0.1)
+        self.manual_speed_spin = self._new_spin(0.001, 10_000.0, 3, 10.0, 1.0)
+        self.manual_speed_spin.setToolTip("Manual stage move speed in mm/min.")
 
         self.minus_button = QPushButton("Step -")
         self.plus_button = QPushButton("Step +")
@@ -144,6 +146,8 @@ class CompactStagePanel(QWidget):
         grid.addWidget(self.plus_button, 2, 3)
         grid.addWidget(self.hold_button, 2, 4)
         grid.addWidget(self.free_button, 2, 5)
+        grid.addWidget(QLabel("Speed"), 2, 6)
+        grid.addWidget(self.manual_speed_spin, 2, 7)
         grid.addWidget(QLabel("Abs"), 3, 0)
         grid.addWidget(self.target_spin, 3, 1)
         grid.addWidget(self.absolute_button, 3, 2)
@@ -162,6 +166,7 @@ class CompactStagePanel(QWidget):
             self.axis_combo,
             self.step_spin,
             self.target_spin,
+            self.manual_speed_spin,
             self.minus_button,
             self.plus_button,
             self.goto_zero_button,
@@ -193,6 +198,7 @@ class CompactStagePanel(QWidget):
             button.setMinimumWidth(0)
         self.step_spin.setMaximumWidth(76)
         self.target_spin.setMaximumWidth(76)
+        self.manual_speed_spin.setMaximumWidth(76)
         for label in (self.status_label, self.position_label):
             label.setMinimumWidth(0)
             label.setMinimumHeight(18)
@@ -203,6 +209,33 @@ class CompactStagePanel(QWidget):
 
     def set_target_validator(self, validator: Callable[[int, float], tuple[bool, str]] | None) -> None:
         self._target_validator = validator
+
+    def apply_runtime_limits(
+        self,
+        *,
+        enforce_software_limits: bool,
+        min_position_mm: float | None = None,
+        max_position_mm: float | None = None,
+    ) -> None:
+        if self.config is None:
+            return
+        if enforce_software_limits:
+            if min_position_mm is None or max_position_mm is None:
+                return
+            runtime_config = replace(
+                self.config,
+                enforce_software_limits=True,
+                min_position_mm=float(min_position_mm),
+                max_position_mm=float(max_position_mm),
+            )
+            self.target_spin.setRange(float(min_position_mm), float(max_position_mm))
+        else:
+            runtime_config = replace(self.config, enforce_software_limits=False)
+            minimum_mm, maximum_mm = self._manual_unlimited_target_range(runtime_config)
+            self.target_spin.setRange(minimum_mm, maximum_mm)
+        self.config = runtime_config
+        if self.controller is not None:
+            self.controller.config = runtime_config
 
     def disconnect_stage(self) -> None:
         self._status_timer.stop()
@@ -311,7 +344,11 @@ class CompactStagePanel(QWidget):
             self.config = config
             self.config_path = path
             self._set_active_axis(config.axis)
-            self.target_spin.setRange(config.min_position_mm, config.max_position_mm)
+            self._set_manual_speed_from_config(config)
+            if config.enforce_software_limits:
+                self.target_spin.setRange(config.min_position_mm, config.max_position_mm)
+            else:
+                self.target_spin.setRange(*self._manual_unlimited_target_range(config))
             self._refresh_port_choices(config.port)
             self.config_loaded.emit(config, str(path))
             if self.controller is None:
@@ -416,6 +453,7 @@ class CompactStagePanel(QWidget):
             return
         try:
             self._set_status("Busy", "running")
+            self._apply_manual_velocity(controller=controller, axis=axis)
             controller.move_relative_mm(axis=axis, delta_mm=delta_mm)
             controller.wait_until_ready()
             self.refresh_status()
@@ -432,6 +470,7 @@ class CompactStagePanel(QWidget):
             return
         try:
             self._set_status("Busy", "running")
+            self._apply_manual_velocity(controller=controller, axis=axis)
             controller.move_absolute_mm(axis=axis, position_mm=position_mm)
             controller.wait_until_ready()
             self.refresh_status()
@@ -472,6 +511,15 @@ class CompactStagePanel(QWidget):
         except Exception as exc:
             self._set_status("Error", "error")
             self._emit_error("Stage Hold Failed", str(exc))
+
+    def _set_manual_speed_from_config(self, config: ShotMotionConfig) -> None:
+        velocity_mm_min = (config.maximum_speed_pps * 60.0) / config.pulses_per_mm
+        blocked = self.manual_speed_spin.blockSignals(True)
+        self.manual_speed_spin.setValue(max(self.manual_speed_spin.minimum(), velocity_mm_min))
+        self.manual_speed_spin.blockSignals(blocked)
+
+    def _apply_manual_velocity(self, *, controller: ShotController, axis: int) -> None:
+        controller.set_velocity_mm_min(axis=axis, velocity_mm_min=self.manual_speed_spin.value())
 
     def _require_controller(self, *, report_errors: bool = True) -> ShotController | None:
         if self.controller is None:
@@ -533,3 +581,9 @@ class CompactStagePanel(QWidget):
         spin.setValue(value)
         spin.setSingleStep(step)
         return spin
+
+    def _manual_unlimited_target_range(self, config: ShotMotionConfig) -> tuple[float, float]:
+        stroke_mm = max(1.0, abs(config.max_position_mm - config.min_position_mm))
+        minimum_mm = min(config.min_position_mm, -stroke_mm)
+        maximum_mm = max(config.max_position_mm, stroke_mm)
+        return minimum_mm, maximum_mm

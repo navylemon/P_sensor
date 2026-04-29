@@ -20,6 +20,7 @@ DEFAULT_CHASSIS_NAME = "cDAQ1"
 DEFAULT_EXPORT_DIRECTORY = "dev_local/exports"
 DEFAULT_AI_MODULE_SLOT = 1
 DEFAULT_AO_MODULE_SLOT = 2
+DEFAULT_AO_INITIAL_CURRENT_MA = 10.0
 SUPPORTED_BACKENDS = {"simulation", "ni"}
 SUPPORTED_AI_MEASUREMENT_MODES = {"resistance", "voltage"}
 MAX_CDAQ_9174_SLOTS = 4
@@ -317,7 +318,7 @@ def _default_app_config(input_channel_count: int = 1, output_channel_count: int 
             ),
             min_current_ma=0.0,
             max_current_ma=20.0,
-            initial_current_ma=0.0,
+            initial_current_ma=DEFAULT_AO_INITIAL_CURRENT_MA,
         )
         for index in range(output_channel_count)
     ]
@@ -473,7 +474,7 @@ def load_config(path: str | Path) -> AppConfig:
             ),
             min_current_ma=float(item.get("min_current_ma", 0.0)),
             max_current_ma=float(item.get("max_current_ma", 20.0)),
-            initial_current_ma=float(item.get("initial_current_ma", 0.0)),
+            initial_current_ma=float(item.get("initial_current_ma", DEFAULT_AO_INITIAL_CURRENT_MA)),
         )
         for index, item in enumerate(ao_channels_data)
     ]

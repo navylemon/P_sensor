@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime
 import json
 from pathlib import Path
@@ -180,6 +181,7 @@ class MainWindow(QMainWindow):
         self.stage_motion_elapsed_s = 0.0
         self.stage_motion_started_at: datetime | None = None
         self.stage_position_history: deque[tuple[float, float | None, float | None]] = deque(maxlen=2000)
+        self.stage_plot_active_axis: int | None = None
         self.stage_mark_items: list[pg.ScatterPlotItem] = []
         self.stage_markers: list[dict[str, Any]] = []
         self.contact_point_position_mm: float | None = None
@@ -406,7 +408,9 @@ class MainWindow(QMainWindow):
         parent = self.workspace_splitter.widget(1) if self.workspace_splitter.count() >= 2 else self.cockpit_panel
         for title in ("Recipe", "Run", "Motion", "Protocol", "Results"):
             group = QGroupBox(title, parent)
-            group.setFixedHeight(group.sizeHint().height())
+            height_hint = group.sizeHint().height()
+            if height_hint >= 0:
+                group.setFixedHeight(height_hint)
             group.hide()
             self._legacy_layout_groups.append(group)
 
@@ -779,7 +783,7 @@ class MainWindow(QMainWindow):
         self.stage_mark_state_label.setMaximumWidth(86)
         self.stage_mark_start_button.clicked.connect(lambda: self._add_stage_marker("start"))
         self.stage_mark_stop_button.clicked.connect(lambda: self._add_stage_marker("stop"))
-        self.stage_plot_clear_button.clicked.connect(self._clear_stage_plot_view)
+        self.stage_plot_clear_button.clicked.connect(lambda _checked=False: self._clear_stage_plot_view())
         row.addWidget(self.stage_plot_mode_label)
         row.addStretch(1)
         row.addWidget(self.stage_mark_state_label)
@@ -1924,7 +1928,7 @@ class MainWindow(QMainWindow):
         self.plot_widget.getAxis("right").setTextPen("#F4A261")
         self.plot_widget.getAxis("right").setPen(pg.mkPen("#3B4450"))
         self.ao_viewbox = pg.ViewBox()
-        self.plot_widget.scene().addItem(self.ao_viewbox)
+        self._add_ao_viewbox_to_plot_scene()
         self.plot_widget.getAxis("right").linkToView(self.ao_viewbox)
         self.ao_viewbox.setXLink(self.plot_widget.getPlotItem())
         self.plot_widget.getPlotItem().vb.sigResized.connect(self._sync_plot_views)
@@ -2371,7 +2375,7 @@ class MainWindow(QMainWindow):
         self.plot_widget.clear()
         self.plot_widget.addLegend(offset=(10, 10))
         self.plot_widget.showAxis("right")
-        self.plot_widget.scene().addItem(self.ao_viewbox)
+        self._add_ao_viewbox_to_plot_scene()
         self.plot_widget.getAxis("right").linkToView(self.ao_viewbox)
         self.ao_viewbox.setXLink(self.plot_widget.getPlotItem())
         self.input_curves.clear()
@@ -2623,9 +2627,12 @@ class MainWindow(QMainWindow):
             return "Ready", "info", f"Storage folder exists: {export_path}"
         if export_path.exists() and not export_path.is_dir():
             return "Blocked", "error", f"Storage path is not a folder: {export_path}"
-        if export_path.parent.exists():
-            return "Warning", "warning", f"Storage folder will be created on Record: {export_path}"
-        return "Blocked", "error", f"Storage parent folder is missing: {export_path.parent}"
+        existing_ancestor = next((parent for parent in export_path.parents if parent.exists()), None)
+        if existing_ancestor is None:
+            return "Blocked", "error", f"Storage path root is missing: {export_path.anchor or export_path.parent}"
+        if not existing_ancestor.is_dir():
+            return "Blocked", "error", f"Storage path ancestor is not a folder: {existing_ancestor}"
+        return "Warning", "warning", f"Storage folder will be created on Record: {export_path}"
 
     def _update_runtime_controls(self) -> None:
         connected = self.controller is not None
@@ -2699,6 +2706,7 @@ class MainWindow(QMainWindow):
             )
         if hasattr(self, "stop_automation_button"):
             self.stop_automation_button.setEnabled(automation_running)
+        self._sync_manual_stage_runtime_limits()
         if self.active_highlight_start_s is None:
             self.mark_state_label.setText(f"Marks {len(self.highlight_intervals)}")
             self._set_badge_style(self.mark_state_label, tone="muted")
@@ -3548,7 +3556,9 @@ class MainWindow(QMainWindow):
     def _stage_motion_bounds(self) -> tuple[float, float]:
         if hasattr(self, "stage_soft_limit_check") and self.stage_soft_limit_check.isChecked():
             return self.stage_soft_min_spin.value(), self.stage_soft_max_spin.value()
-        if self.motion_config is not None:
+        if hasattr(self, "stage_soft_limit_check"):
+            return -float("inf"), float("inf")
+        if self.motion_config is not None and self.motion_config.enforce_software_limits:
             return self.motion_config.min_position_mm, self.motion_config.max_position_mm
         return -float("inf"), float("inf")
 
@@ -3693,7 +3703,19 @@ class MainWindow(QMainWindow):
         selection.format.setForeground(QColor("#F0F6FC"))
         selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
         self.orchestration_step_list.setExtraSelections([selection])
-        self._center_orchestration_step_block(block)
+        QTimer.singleShot(0, lambda step_index=active_step_index: self._scroll_orchestration_to_step(step_index))
+
+    def _scroll_orchestration_to_step(self, step_index: int) -> None:
+        if not hasattr(self, "orchestration_step_list"):
+            return
+        if self._active_orchestration_step_index() != step_index:
+            return
+        block = self.orchestration_step_list.document().findBlockByNumber(step_index - 1)
+        if not block.isValid():
+            return
+        cursor = QTextCursor(block)
+        self.orchestration_step_list.setTextCursor(cursor)
+        self.orchestration_step_list.centerCursor()
 
     def _center_orchestration_step_block(self, block) -> None:
         if not hasattr(self, "orchestration_step_list"):
@@ -3938,12 +3960,47 @@ class MainWindow(QMainWindow):
     def _apply_motion_config_to_soft_limits(self, motion_config) -> None:
         if not hasattr(self, "stage_soft_min_spin"):
             return
-        self.stage_soft_min_spin.setRange(motion_config.min_position_mm, motion_config.max_position_mm)
-        self.stage_soft_max_spin.setRange(motion_config.min_position_mm, motion_config.max_position_mm)
+        minimum_mm, maximum_mm = self._expanded_stage_limit_range(motion_config)
+        self.stage_soft_min_spin.setRange(minimum_mm, maximum_mm)
+        self.stage_soft_max_spin.setRange(minimum_mm, maximum_mm)
         self.stage_soft_min_spin.setValue(motion_config.min_position_mm)
         self.stage_soft_max_spin.setValue(motion_config.max_position_mm)
         self.stage_soft_limit_check.setChecked(bool(motion_config.enforce_software_limits))
         self._refresh_origin_confirmation_controls()
+        self._sync_manual_stage_runtime_limits()
+
+    def _expanded_stage_limit_range(self, motion_config) -> tuple[float, float]:
+        stroke_mm = max(1.0, abs(motion_config.max_position_mm - motion_config.min_position_mm))
+        return min(motion_config.min_position_mm, -stroke_mm), max(motion_config.max_position_mm, stroke_mm)
+
+    def _runtime_motion_config(self):
+        if self.motion_config is None:
+            return None
+        if not hasattr(self, "stage_soft_limit_check") or not self.stage_soft_limit_check.isChecked():
+            return replace(self.motion_config, enforce_software_limits=False)
+        if self._stage_soft_limit_error() is not None:
+            return self.motion_config
+        return replace(
+            self.motion_config,
+            enforce_software_limits=True,
+            min_position_mm=self.stage_soft_min_spin.value(),
+            max_position_mm=self.stage_soft_max_spin.value(),
+        )
+
+    def _sync_manual_stage_runtime_limits(self) -> None:
+        if not hasattr(self, "stage_panel"):
+            return
+        runtime_config = self._runtime_motion_config()
+        if runtime_config is None:
+            return
+        if runtime_config.enforce_software_limits:
+            self.stage_panel.apply_runtime_limits(
+                enforce_software_limits=True,
+                min_position_mm=runtime_config.min_position_mm,
+                max_position_mm=runtime_config.max_position_mm,
+            )
+            return
+        self.stage_panel.apply_runtime_limits(enforce_software_limits=False)
 
     def _motion_origin_confirmation_required(self) -> bool:
         return self.motion_config is not None and not is_simulated_motion_config(self.motion_config)
@@ -4023,7 +4080,14 @@ class MainWindow(QMainWindow):
             axis_name = "Z" if axis == 1 else "X"
             self._set_stage_dashboard_style(self.stage_axis_state_label, f"Manual {axis_name}", "info")
 
-    def _handle_stage_position_changed(self, axis: int, position_mm: float) -> None:
+    def _handle_stage_position_changed(
+        self,
+        axis: int,
+        position_mm: float,
+        *,
+        elapsed_s: float | None = None,
+        force_sample: bool = False,
+    ) -> None:
         now = datetime.now()
         previous_position = self.stage_positions_mm.get(axis)
         position_changed = previous_position is None or abs(previous_position - position_mm) > 1e-9
@@ -4035,12 +4099,15 @@ class MainWindow(QMainWindow):
         if hasattr(self, "stage_motion_state_label"):
             self._set_stage_dashboard_style(self.stage_motion_state_label, "State Updated", "info")
         self._set_stage_last_update_now()
-        if position_changed:
-            if self.stage_motion_started_at is not None:
-                self.stage_motion_elapsed_s += max(0.0, (now - self.stage_motion_started_at).total_seconds())
-                self.stage_motion_started_at = now
+        if position_changed or force_sample:
+            if elapsed_s is None:
+                elapsed_s = self.stage_motion_elapsed_s
+                if self.stage_motion_started_at is not None:
+                    elapsed_s += max(0.0, (now - self.stage_motion_started_at).total_seconds())
+                    self.stage_motion_started_at = now
+            self.stage_motion_elapsed_s = max(self.stage_motion_elapsed_s, elapsed_s)
             self.stage_position_history.append(
-                (self.stage_motion_elapsed_s, self.stage_positions_mm.get(1), self.stage_positions_mm.get(2))
+                (elapsed_s, self.stage_positions_mm.get(1), self.stage_positions_mm.get(2))
             )
             self._refresh_stage_plot()
         self._refresh_readiness_status()
@@ -4051,11 +4118,22 @@ class MainWindow(QMainWindow):
         samples = list(self.stage_position_history)
         z_points = [(elapsed, z) for elapsed, z, _ in samples if z is not None]
         x_points = [(elapsed, x) for elapsed, _, x in samples if x is not None]
-        self.stage_trace_curve.setData([elapsed for elapsed, _ in z_points], [z for _, z in z_points])
+        if self.stage_plot_active_axis in {None, 1}:
+            self.stage_trace_curve.setData([elapsed for elapsed, _ in z_points], [z for _, z in z_points])
+        else:
+            self.stage_trace_curve.setData([], [])
         if hasattr(self, "stage_x_trace_curve"):
-            self.stage_x_trace_curve.setData([elapsed for elapsed, _ in x_points], [x for _, x in x_points])
+            if self.stage_plot_active_axis in {None, 2}:
+                self.stage_x_trace_curve.setData([elapsed for elapsed, _ in x_points], [x for _, x in x_points])
+            else:
+                self.stage_x_trace_curve.setData([], [])
         trajectory_points = [(x, elapsed, z) for elapsed, z, x in samples if z is not None and x is not None]
-        if len(trajectory_points) >= 2 and getattr(self, "stage_trajectory_3d_item", None) is not None:
+        if (
+            len(trajectory_points) >= 2
+            and self.stage_plot_active_axis is None
+            and self._stage_axes_vary_for_trajectory(samples)
+            and getattr(self, "stage_trajectory_3d_item", None) is not None
+        ):
             positions = np.asarray(trajectory_points, dtype=float)
             centered = positions - positions.mean(axis=0)
             max_span = float(np.ptp(positions, axis=0).max())
@@ -4070,6 +4148,17 @@ class MainWindow(QMainWindow):
         self.stage_plot_widget.setLabel("bottom", "Move time", units="s")
         self.stage_plot_widget.setLabel("left", "Position", units="mm")
         self.stage_plot_mode_label.setText("Position vs move time")
+
+    def _stage_axes_vary_for_trajectory(self, samples: list[tuple[float, float | None, float | None]]) -> bool:
+        z_values = [z for _, z, _ in samples if z is not None]
+        x_values = [x for _, _, x in samples if x is not None]
+        return self._stage_axis_varies(z_values) and self._stage_axis_varies(x_values)
+
+    def _stage_axis_varies(self, values: list[float]) -> bool:
+        if len(values) < 2:
+            return False
+        first = values[0]
+        return any(abs(value - first) > 1e-9 for value in values[1:])
 
     def _current_stage_plot_point(self) -> tuple[float, float] | None:
         z_position = self.stage_positions_mm.get(1)
@@ -4124,9 +4213,10 @@ class MainWindow(QMainWindow):
             self.stage_mark_state_label.setText("Marks 0")
             self._set_badge_style(self.stage_mark_state_label, tone="muted")
 
-    def _clear_stage_plot_view(self) -> None:
+    def _clear_stage_plot_view(self, *, log: bool = True) -> None:
         self.stage_position_history.clear()
         self.stage_motion_elapsed_s = 0.0
+        self.stage_plot_active_axis = None
         if self.stage_motion_started_at is not None:
             self.stage_motion_started_at = datetime.now()
         self._clear_stage_markers()
@@ -4138,7 +4228,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "stage_plot_stack"):
             self.stage_plot_stack.setCurrentWidget(self.stage_plot_widget)
         self.stage_plot_mode_label.setText("Position vs move time")
-        self._log("Stage plot cleared")
+        if log:
+            self._log("Stage plot cleared")
 
     def _rebuild_stage_markers_from_payload(self, markers: list[dict[str, Any]]) -> None:
         self._clear_stage_markers()
@@ -4336,6 +4427,8 @@ class MainWindow(QMainWindow):
         self._configure_automation_progress(recipe)
         self.automation_started_at = datetime.now()
         self._reset_history()
+        self._clear_stage_plot_view(log=False)
+        self.stage_plot_active_axis = self.motion_config.axis if self.motion_config is not None else None
         if hasattr(self, "stage_panel"):
             self.stage_panel.set_live_status_polling(False)
         options = AutomationSessionOptions(
@@ -4394,18 +4487,20 @@ class MainWindow(QMainWindow):
             self._set_badge_style(self.motion_status_label, tone="muted")
             self._set_stage_status("Disconnected", "muted")
             return NoOpCommandBridge()
+        runtime_motion_config = self._runtime_motion_config() or self.motion_config
         if self._can_reuse_manual_stage_controller():
             controller = self.stage_panel.controller
             self.motion_status_label.setText(
-                f"{self.motion_config.controller_model} {self.motion_config.port} axis {self.motion_config.axis} reused"
+                f"{runtime_motion_config.controller_model} {runtime_motion_config.port} axis {runtime_motion_config.axis} reused"
             )
             self._set_badge_style(self.motion_status_label, tone="info")
             self._set_stage_status("Bridge Reused", "info")
             self._log("Automation using existing manual stage connection")
+            controller.config = runtime_motion_config
             return ShotCommandBridge(controller, disconnect_on_close=False)
-        controller = create_shot_controller(self.motion_config)
+        controller = create_shot_controller(runtime_motion_config)
         self.motion_status_label.setText(
-            f"{self.motion_config.controller_model} {self.motion_config.port} axis {self.motion_config.axis}"
+            f"{runtime_motion_config.controller_model} {runtime_motion_config.port} axis {runtime_motion_config.axis}"
         )
         self._set_badge_style(self.motion_status_label, tone="info")
         self._set_stage_status("Bridge Ready", "info")
@@ -4447,23 +4542,18 @@ class MainWindow(QMainWindow):
     def _make_automation_safety_policy(self, *, operator_confirmed: bool = False) -> AutomationSafetyPolicy:
         if self.motion_config is None:
             return AutomationSafetyPolicy()
-        min_position_mm = self.motion_config.min_position_mm
-        max_position_mm = self.motion_config.max_position_mm
-        soft_limit_enabled = hasattr(self, "stage_soft_limit_check") and self.stage_soft_limit_check.isChecked()
-        if soft_limit_enabled:
-            min_position_mm = self.stage_soft_min_spin.value()
-            max_position_mm = self.stage_soft_max_spin.value()
-        if not self.motion_config.enforce_software_limits:
+        runtime_motion_config = self._runtime_motion_config() or self.motion_config
+        if not runtime_motion_config.enforce_software_limits:
             return AutomationSafetyPolicy(
-                min_position_mm=min_position_mm if soft_limit_enabled else None,
-                max_position_mm=max_position_mm if soft_limit_enabled else None,
+                min_position_mm=None,
+                max_position_mm=None,
                 require_target_displacement=True,
                 require_operator_confirmation=True,
                 operator_confirmed=operator_confirmed,
             )
         return AutomationSafetyPolicy(
-            min_position_mm=min_position_mm,
-            max_position_mm=max_position_mm,
+            min_position_mm=runtime_motion_config.min_position_mm,
+            max_position_mm=runtime_motion_config.max_position_mm,
             require_target_displacement=True,
             require_operator_confirmation=True,
             operator_confirmed=operator_confirmed,
@@ -4487,6 +4577,11 @@ class MainWindow(QMainWindow):
 
     def _queue_automation_live_frame(self, frame: MeasurementFrame) -> None:
         self.automation_live_frames.put(frame)
+
+    def _automation_elapsed_seconds(self) -> float:
+        if self.automation_started_at is None:
+            return self.stage_motion_elapsed_s
+        return max(0.0, (datetime.now() - self.automation_started_at).total_seconds())
 
     def _drain_automation_live_frames(self) -> None:
         processed = False
@@ -4595,7 +4690,12 @@ class MainWindow(QMainWindow):
             resistance_text = payload.get("contact_resistance_ohm")
             if position_text is not None:
                 axis = int(payload.get("stage_axis", self.motion_config.axis if self.motion_config is not None else 1))
-                self._handle_stage_position_changed(axis, float(position_text))
+                self._handle_stage_position_changed(
+                    axis,
+                    float(position_text),
+                    elapsed_s=self._automation_elapsed_seconds(),
+                    force_sample=True,
+                )
             self.automation_step_label.setText(
                 f"Contact {position_text} mm / {resistance_text} ohm"
             )
@@ -4631,6 +4731,15 @@ class MainWindow(QMainWindow):
                 f"{cycle_prefix}Step {payload['step_index']}: {payload['step_id']}"
             )
             self._refresh_automation_progress()
+            position_before = payload.get("position_before_mm")
+            if position_before is not None:
+                axis = self.motion_config.axis if self.motion_config is not None else 1
+                self._handle_stage_position_changed(
+                    axis,
+                    float(position_before),
+                    elapsed_s=self._automation_elapsed_seconds(),
+                    force_sample=True,
+                )
             self._log(
                 f"Automation step started: {payload['step_id']} phase={phase} "
                 f"target={payload['target_displacement']} speed={payload.get('velocity_mm_min')}"
@@ -4644,7 +4753,12 @@ class MainWindow(QMainWindow):
             self._log(f"Automation phase started: step={payload['step_id']} phase={self.automation_current_phase}")
             return
         if event_name == "motion_position":
-            self._handle_stage_position_changed(int(payload["axis"]), float(payload["position_mm"]))
+            self._handle_stage_position_changed(
+                int(payload["axis"]),
+                float(payload["position_mm"]),
+                elapsed_s=self._automation_elapsed_seconds(),
+                force_sample=True,
+            )
             return
         if event_name == "phase_completed":
             self.automation_current_phase = payload.get("phase") or self.automation_current_phase
@@ -4663,7 +4777,12 @@ class MainWindow(QMainWindow):
             )
             if position_mm is not None:
                 axis = self.motion_config.axis if self.motion_config is not None else 1
-                self._handle_stage_position_changed(axis, float(position_mm))
+                self._handle_stage_position_changed(
+                    axis,
+                    float(position_mm),
+                    elapsed_s=self._automation_elapsed_seconds(),
+                    force_sample=True,
+                )
             self._refresh_automation_progress()
             self._append_result_row(payload)
             self._log(
@@ -4753,6 +4872,11 @@ class MainWindow(QMainWindow):
         plot_viewbox = self.plot_widget.getPlotItem().vb
         self.ao_viewbox.setGeometry(plot_viewbox.sceneBoundingRect())
         self.ao_viewbox.linkedViewChanged(plot_viewbox, self.ao_viewbox.XAxis)
+
+    def _add_ao_viewbox_to_plot_scene(self) -> None:
+        scene = self.plot_widget.scene()
+        if self.ao_viewbox.scene() is not scene:
+            scene.addItem(self.ao_viewbox)
 
     def _apply_plot_section_geometry(self) -> None:
         plot_widgets = [

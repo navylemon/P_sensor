@@ -36,7 +36,7 @@ class AnalogOutputChannelConfig:
     physical_channel: str
     min_current_ma: float = 0.0
     max_current_ma: float = 20.0
-    initial_current_ma: float = 0.0
+    initial_current_ma: float = 10.0
 
 
 @dataclass(slots=True)

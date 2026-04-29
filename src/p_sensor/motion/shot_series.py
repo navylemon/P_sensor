@@ -160,13 +160,17 @@ def _load_bool(payload: dict, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def _parse_shot_coordinate(value: str) -> int:
+    return int("".join(value.split()))
+
+
 def parse_shot_status_reply(reply: str) -> ShotStatus:
     parts = [part.strip() for part in reply.split(",")]
     if len(parts) != 5:
         raise MotionError(f"Invalid SHOT status reply: {reply!r}")
     try:
-        axis1_position = int(parts[0])
-        axis2_position = int(parts[1])
+        axis1_position = _parse_shot_coordinate(parts[0])
+        axis2_position = _parse_shot_coordinate(parts[1])
     except ValueError as exc:
         raise MotionError(f"Invalid SHOT coordinates in reply: {reply!r}") from exc
 

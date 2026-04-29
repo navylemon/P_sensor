@@ -181,6 +181,9 @@ class ExperimentRunner:
             self._disconnect_bridge()
 
     def _run_step(self, *, step_index: int, step: AutomationStep, store: AutomationSessionStore) -> None:
+        position_before_mm = self._get_motion_position_mm()
+        position_after_engage_mm = None
+        position_after_disengage_mm = None
         self._emit(
             "step_started",
             step_index=step_index,
@@ -194,7 +197,6 @@ class ExperimentRunner:
             position_after_engage_mm=position_after_engage_mm,
             position_after_disengage_mm=position_after_disengage_mm,
         )
-        position_before_mm = self._get_motion_position_mm()
         self.safety_policy.validate_position_mm(
             position_before_mm,
             label=f"position before step {step.step_id!r}",
@@ -262,7 +264,6 @@ class ExperimentRunner:
                 phase="measure",
                 duration_s=step.measure_duration_s,
             )
-        position_after_disengage_mm = None
         if step.disengage_after_measure:
             self._emit_phase_started(step_index=step_index, step=step, phase="disengage")
             self.command_bridge.disengage(step)
@@ -295,6 +296,9 @@ class ExperimentRunner:
             phase=step.phase,
             velocity_mm_min=step.velocity_mm_min,
             measure_enabled=step.measure_enabled,
+            position_before_mm=position_before_mm,
+            position_after_engage_mm=position_after_engage_mm,
+            position_after_disengage_mm=position_after_disengage_mm,
         )
 
         self._ensure_not_cancelled()
@@ -516,10 +520,15 @@ class ExperimentRunner:
 
     def _wait_until_ready(self, step: AutomationStep, *, phase: str) -> None:
         try:
-            self.command_bridge.wait_until_ready(
-                step.ready_timeout_s,
-                position_callback=lambda position_mm: self._emit_motion_position(position_mm, phase=phase),
-            )
+            try:
+                self.command_bridge.wait_until_ready(
+                    step.ready_timeout_s,
+                    position_callback=lambda position_mm: self._emit_motion_position(position_mm, phase=phase),
+                )
+            except TypeError as exc:
+                if "position_callback" not in str(exc):
+                    raise
+                self.command_bridge.wait_until_ready(step.ready_timeout_s)
         except TimeoutError as exc:
             raise AutomationReadyTimeoutError(
                 step_id=step.step_id,

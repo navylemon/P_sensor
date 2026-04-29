@@ -33,7 +33,7 @@
       "physical_channel": "cDAQ1Mod2/ao0",
       "min_current_ma": 0.0,
       "max_current_ma": 20.0,
-      "initial_current_ma": 0.0
+      "initial_current_ma": 10.0
     }
   ]
 }

@@ -25,7 +25,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from p_sensor.config import load_config, resolve_runtime_path, save_config, validate_app_config
+from p_sensor.config import (
+    DEFAULT_AO_INITIAL_CURRENT_MA,
+    load_config,
+    resolve_runtime_path,
+    save_config,
+    validate_app_config,
+)
 from p_sensor.models import AnalogInputChannelConfig, AnalogOutputChannelConfig, AppConfig
 from p_sensor.ui.protocol_panel import ProtocolPanel
 
@@ -262,7 +268,7 @@ class ChannelConfigManagerDialog(QDialog):
             physical_channel=f"{self._working_config.chassis_name}Mod{self._working_config.ao_module_slot}/ao{index}",
             min_current_ma=0.0,
             max_current_ma=20.0,
-            initial_current_ma=0.0,
+            initial_current_ma=DEFAULT_AO_INITIAL_CURRENT_MA,
         )
 
     def _load_into_tables(self, config: AppConfig) -> None:
@@ -346,7 +352,9 @@ class ChannelConfigManagerDialog(QDialog):
                     physical_channel=self._table_text(self.ao_table, row, 2, self._default_ao_channel(row).physical_channel),
                     min_current_ma=float(self._table_text(self.ao_table, row, 3, "0.0")),
                     max_current_ma=float(self._table_text(self.ao_table, row, 4, "20.0")),
-                    initial_current_ma=float(self._table_text(self.ao_table, row, 5, "0.0")),
+                    initial_current_ma=float(
+                        self._table_text(self.ao_table, row, 5, str(DEFAULT_AO_INITIAL_CURRENT_MA))
+                    ),
                 )
             )
         return channels
