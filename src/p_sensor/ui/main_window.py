@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import queue
 import threading
@@ -12,8 +13,17 @@ from typing import Any, Callable
 
 import numpy as np
 import pyqtgraph as pg
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 try:
-    import pyqtgraph.opengl as gl
+    if _env_flag_enabled("P_SENSOR_ENABLE_OPENGL_STAGE_PLOT"):
+        import pyqtgraph.opengl as gl
+    else:
+        gl = None
 except Exception:  # pragma: no cover - optional OpenGL runtime dependency
     gl = None
 from PySide6.QtCore import QSettings, QTimer, Qt
@@ -5045,7 +5055,6 @@ class MainWindow(QMainWindow):
         session_label = self.settings.value("session_label")
         self.settings.endGroup()
 
-        self.showMaximized()
         self.workspace_splitter.setSizes(self._default_workspace_splitter_sizes())
 
         self._restore_check_states(ai_enabled, self.ai_enabled_checks)
